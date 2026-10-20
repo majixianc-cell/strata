@@ -1037,7 +1037,7 @@ void LayerManager::MergeLayersWithSameMaterial(double tol)
 /*! \brief Return the lower z-coordinate of the given layer. For the bottom-most layer, this function returns a coordinate a large distance below the stack-up. The value wouldn't matter in the context of the MGF computations.*/
 double LayerManager::GetZmin(int idx)
 {
-	if (idx < -1 || idx > (int)layers.size() + 1)
+	if (idx < -1 || idx > (int)layers.size())
 		throw std::out_of_range("[ERROR] LayerManager::GetZmin(): Index out of bounds.");
 	else if (idx == -1)
 		return layers[0].zmax;
@@ -1051,7 +1051,7 @@ double LayerManager::GetZmin(int idx)
 /*! \brief Return the upper z-coordinate of the given layer. For the top-most layer, this function returns a coordinate a large distance above the stack-up. The value wouldn't matter in the context of the MGF computations.*/
 double LayerManager::GetZmax(int idx)
 {
-	if (idx < -1 || idx > (int)layers.size() + 1)
+	if (idx < -1 || idx > (int)layers.size())
 		throw std::out_of_range("[ERROR] LayerManager::GetZmax(): Index out of bounds.");
 	else if (idx == -1)
 		return layers[0].zmax + (layers[0].zmax - layers.back().zmin)*10.0;
@@ -1065,7 +1065,7 @@ double LayerManager::GetZmax(int idx)
 /*! \brief Return the height of the given layer.*/
 double LayerManager::GetHeight(int idx)
 {
-	if (idx < -1 || idx > (int)layers.size() + 1)
+	if (idx < -1 || idx > (int)layers.size())
 		throw std::out_of_range("[ERROR] LayerManager::GetHeight(): Index out of bounds.");
 	else if (idx == -1)
 		return inf;
