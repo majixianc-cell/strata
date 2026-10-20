@@ -301,19 +301,25 @@ void MGF::UpdateZNodes()
 
     std::cout << "========================= Update the z nodes =========================" << std::endl;
 
+    if (lm.rho_nodes.size() < 2)
+        return;
+
     for (int layer = 0; layer < lm.layers.size(); layer++)
     {
-        // Ensure the vector has at least 3 elements
-        if (lm.z_nodes[layer].size() < 2) {
-            std::cerr << "Vector needs at least 2 elements." << std::endl;
-        }
+        // Layers with fewer than two nodes have no midpoints to test. (The loop bound size() - 1 used to underflow for
+        // a layer without nodes, and the refinement then read far past the node list.)
+        if (layer >= (int)lm.z_nodes.size() || lm.z_nodes[layer].size() < 2)
+            continue;
 
-        std::vector<double> z_test_nodes;
+        // Midpoints and spacings are taken before any node is added: AddZTable() inserts into this list and shifts
+        // the indices.
+        std::vector<double> z_test_nodes, z_spacings;
 
-        for (int ii = 0; ii < lm.z_nodes[layer].size() - 1; ii++)
+        for (int ii = 0; ii < (int)lm.z_nodes[layer].size() - 1; ii++)
         {
             double z_test = (lm.z_nodes[layer][ii+1] + lm.z_nodes[layer][ii])/2;
             z_test_nodes.push_back(z_test);
+            z_spacings.push_back(lm.z_nodes[layer][ii + 1] - lm.z_nodes[layer][ii]);
         }
 
         // compute the MGF
@@ -325,12 +331,14 @@ void MGF::UpdateZNodes()
             double z_test = z_test_nodes[ii];
             double z_src = z_test_nodes[ii];
 
-            double z_spacing = lm.z_nodes[layer][ii + 1] - lm.z_nodes[layer][ii];
+            double z_spacing = z_spacings[ii];
             int level = 1;
 
             int i = lm.FindLayer(z_test);
             int m = lm.FindLayer(z_src);
             smgf.SetLayers(i, m);
+            this->i = i;
+            this->m = m;
             bool is_Midpoint_Correct = IsMidpointCorrect(rho_test, z_src, z_test, s.adaptive_threshold, false);
 
             if (!is_Midpoint_Correct)
@@ -354,26 +362,35 @@ void MGF::UpdateRhoNodes()
 {
     std::cout << "===========================Update the rho nodes===========================" << std::endl;
 
-    std::vector<double> rho_test_nodes;
+    // A z-node of the first layer that has any (the first layer may have none)
+    int layer0 = 0;
+    while (layer0 < (int)lm.z_nodes.size() && lm.z_nodes[layer0].empty())
+        layer0++;
+    if (layer0 == (int)lm.z_nodes.size() || lm.rho_nodes.size() < 2)
+        return;
 
-    for (int ii = 0; ii < lm.rho_nodes.size() - 1; ii++)
+    // Midpoints and spacings are taken before any node is added (AddRhoTable() shifts the indices)
+    std::vector<double> rho_test_nodes, rho_spacings;
+
+    for (int ii = 0; ii < (int)lm.rho_nodes.size() - 1; ii++)
     {
         double rho_test = (lm.rho_nodes[ii] + lm.rho_nodes[ii+1])/2;
         rho_test_nodes.push_back(rho_test);
+        rho_spacings.push_back(lm.rho_nodes[ii + 1] - lm.rho_nodes[ii]);
     }
 
 
     // compute the MGF
     // choose rho that will more likely to lead to strong singularity
 
-    double z_test = lm.z_nodes[0][0];
-    double z_src = lm.z_nodes[0][0];
+    double z_test = lm.z_nodes[layer0][0];
+    double z_src = lm.z_nodes[layer0][0];
 
 	//std::cout << "===========================Iteration on the test rho nodes===========================" << std::endl;
     for (int ii = 0; ii < rho_test_nodes.size(); ii++) {
 
         double rho_test = rho_test_nodes[ii];
-        double rho_spacing = lm.rho_nodes[ii + 1] - lm.rho_nodes[ii];
+        double rho_spacing = rho_spacings[ii];
         int level = 1;
 
         // verify if this point will be added based on the relative error rate
@@ -422,7 +439,8 @@ void MGF::ProcessZTests(int layer_idx, double rho_test, double z_spacing, double
         return;
     for (double test_z : z_tests) {
         std::vector<double> new_z_tests;
-        TestAddZTableRecursive(layer_idx, rho_test, z_spacing, z_test, z_src, level + 1, new_z_tests);
+        // Refine around each point just added (as ProcessRhoTests() does), not around the original midpoint again
+        TestAddZTableRecursive(layer_idx, rho_test, z_spacing, test_z, test_z, level + 1, new_z_tests);
 
         // Process new test points if generated.
         if (!new_z_tests.empty()) {
@@ -521,6 +539,8 @@ void MGF::TestAddRhoTableRecursive(double rho_test, double rho_spacing, double z
         int i = lm.FindLayer(z_test);
         int m = lm.FindLayer(z_src);
         smgf.SetLayers(i, m);
+        this->i = i;
+        this->m = m;
 
         bool add_point_to_table = IsMidpointCorrect(rho_tests_l1[jj], z_test, z_src, s.adaptive_threshold, true);
         if (!add_point_to_table)
@@ -542,6 +562,8 @@ void MGF::TestAddZTableRecursive(int layer_idx, double rho_test, double z_spacin
         int i = lm.FindLayer(z_tests_l1[jj]);
         int m = lm.FindLayer(z_tests_l1[jj]);
         smgf.SetLayers(i, m);
+        this->i = i;
+        this->m = m;
         bool is_Midpoint_Correct = IsMidpointCorrect(rho_test, z_tests_l1[jj], z_tests_l1[jj], s.adaptive_threshold, false);
 
         if (!is_Midpoint_Correct)
