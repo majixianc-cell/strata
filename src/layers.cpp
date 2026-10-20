@@ -953,13 +953,15 @@ void LayerManager::MergeLayersWithSameMaterial(double tol)
 		// Check if the layer above is of the same material as this one. Layers using a
 		// dispersion model are never merged, since their stored epsr is a placeholder that
 		// does not capture the model parameters.
+		// (The complex difference covers both parts of epsr. A former extra test compared the real part of one layer
+		// with the imaginary part of the other, so identical layers were never merged.) Only touching layers merge.
 		if (layers[ii].dielectric_model == DielectricModelType::CONSTANT &&
 		    layers[jj].dielectric_model == DielectricModelType::CONSTANT &&
 		    std::abs(layers[ii].epsr - layers[jj].epsr) < tol &&
 		    std::abs(layers[ii].mur - layers[jj].mur) < tol &&
-		    std::abs(layers[ii].epsr.real() - layers[jj].epsr.imag()) < tol &&
 		    std::abs(layers[ii].sigma - layers[jj].sigma) < tol &&
-		    std::abs(layers[ii].sigmamu - layers[jj].sigmamu) < tol)
+		    std::abs(layers[ii].sigmamu - layers[jj].sigmamu) < tol &&
+		    std::abs(layers[jj].zmin - layers[ii].zmax) <= 1.0e-12*std::max(1.0, std::abs(layers[ii].zmax)))
 		{
 			// It is the same, so remember that we need to combine this layer with the one above it
 			to_be_combined.back().push_back(ii);
@@ -997,6 +999,21 @@ void LayerManager::MergeLayersWithSameMaterial(double tol)
 		new_layers[ii].zmin = layers[to_be_combined[ii].back()].zmin;
 		new_layers[ii].h = new_layers[ii].zmax - new_layers[ii].zmin;
 
+	}
+
+	// Keep per-layer z-nodes, if any were inserted before processing, aligned with the merged layers
+	if (!z_nodes.empty() && to_be_combined.size() != layers.size())
+	{
+		std::vector<std::vector<double>> new_nodes (to_be_combined.size());
+		for (int ii = 0; ii < to_be_combined.size(); ii++)
+		{
+			for (int idx : to_be_combined[ii])
+				if (idx < (int)z_nodes.size())
+					new_nodes[ii].insert(new_nodes[ii].end(), z_nodes[idx].begin(), z_nodes[idx].end());
+			std::sort(new_nodes[ii].begin(), new_nodes[ii].end());
+			new_nodes[ii].erase(std::unique(new_nodes[ii].begin(), new_nodes[ii].end()), new_nodes[ii].end());
+		}
+		z_nodes = new_nodes;
 	}
 
 	// Update the final list of layers
