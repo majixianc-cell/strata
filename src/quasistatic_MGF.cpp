@@ -38,6 +38,7 @@
 #include <complex>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 #include "quasistatic_MGF.hpp"
 #include "constants.hpp"
@@ -88,8 +89,12 @@ void QuasistaticMGF::Initialize(LayerManager *_lm, double _f, std::vector<bool> 
 	components = _components;
 	extract_singularities = _extract_singularities;
 	
+	// The layer data are frequency dependent; a LayerManager processed at another frequency would silently give the
+	// kernels of that frequency (it is shared through a pointer, so it is not re-processed behind its other users).
 	if (!lm->layers_processed)
 		lm->ProcessLayers(f);
+	else if (lm->processed_frequency != f)
+		throw std::logic_error("[ERROR] QuasistaticMGF::Initialize(): The LayerManager was processed at " + std::to_string(lm->processed_frequency) + " Hz, not at the requested " + std::to_string(f) + " Hz. Call ProcessLayers() for this frequency, or use one LayerManager per frequency.");
 
 	// Compute fresnel reflection coefficients for each layer with its adjacent layer
 	ComputeFresnelCoefficients();

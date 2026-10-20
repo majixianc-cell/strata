@@ -562,6 +562,7 @@ void LayerManager::ProcessLayers(double f)
 	// }
 
 	layers_processed = true;
+	processed_frequency = f;
 
 	return;
 	

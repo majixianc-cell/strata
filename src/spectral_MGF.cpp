@@ -36,6 +36,7 @@
 #include <complex>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 #include "spectral_MGF.hpp"
 #include "constants.hpp"
@@ -59,8 +60,12 @@ void SpectralMGF::Initialize(LayerManager *_lm, double _f, std::vector<bool> _co
 	extract_quasistatic = _extract_quasistatic;
 	extract_homogeneous = _extract_homogeneous;
 	
+	// The layer data are frequency dependent; a LayerManager processed at another frequency would silently give the
+	// kernels of that frequency (it is shared through a pointer, so it is not re-processed behind its other users).
 	if (!lm->layers_processed)
 		lm->ProcessLayers(f);
+	else if (lm->processed_frequency != f)
+		throw std::logic_error("[ERROR] SpectralMGF::Initialize(): The LayerManager was processed at " + std::to_string(lm->processed_frequency) + " Hz, not at the requested " + std::to_string(f) + " Hz. Call ProcessLayers() for this frequency, or use one LayerManager per frequency.");
 
 	if (extract_quasistatic)
 	{
