@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <complex>
 #include <vector>
 #include <stdexcept>
@@ -2127,6 +2128,25 @@ std::vector<int> MGF::GetColumns(double rho)
 }
 
 
+/*! \brief Numbers that identify what an interpolation table was computed for: frequency, layers and half-spaces,
+and the settings that change the tabulated values. Stored in the table file and compared on loading.*/
+std::vector<double> MGF::TableSignature(int entries_per_sample)
+{
+	std::vector<double> sig = {f, (double)entries_per_sample, (double)lm.layers.size()};
+	for (int ii = 0; ii < (int)lm.layers.size(); ii++)
+	{
+		sig.insert(sig.end(), {lm.layers[ii].zmin, lm.layers[ii].zmax, lm.eps[ii].real(), lm.eps[ii].imag(), lm.mu[ii].real(), lm.mu[ii].imag()});
+	}
+	sig.insert(sig.end(), {lm.eps_top.real(), lm.eps_top.imag(), lm.mu_top.real(), lm.mu_top.imag(), (double)lm.isPEC_top,
+	                       lm.eps_bot.real(), lm.eps_bot.imag(), lm.mu_bot.real(), lm.mu_bot.imag(), (double)lm.isPEC_bot,
+	                       (double)s.extract_quasistatic, (double)s.extract_homogeneous, (double)s.extract_singularities,
+	                       (double)s.sampling_method, (double)s.curl_type, (double)s.DCIM_method});
+	for (bool c : s.components) sig.push_back(c);
+	for (bool c : s.components_curl) sig.push_back(c);
+	return sig;
+}
+
+
 /*! \brief Load an MGF interpolation table from disk. Returns 0 if successful.*/
 template<std::size_t N>
 int MGF::LoadTable(std::vector<std::vector<table_entry<N>>> &table, std::string filename)
@@ -2138,6 +2158,22 @@ int MGF::LoadTable(std::vector<std::vector<table_entry<N>>> &table, std::string 
 	if (!fin)
 	{
 		std::cout << "\n[WARNING] MGF::LoadTable(): Failed to open the interpolation table file. Skipping import and generating a new table instead." << std::endl;
+		return -1;
+	}
+
+	// A table is only valid for the frequency, stack-up and settings it was computed for. Files without this header
+	// (written before it existed) or for another configuration are not used.
+	char magic[8] = {0};
+	fin.read(magic, 8);
+	int n_sig = 0;
+	fin.read(reinterpret_cast<char *> (&n_sig), sizeof(n_sig));
+	std::vector<double> expected = TableSignature(N);
+	std::vector<double> found (std::max(n_sig, 0));
+	if (fin && n_sig == (int)expected.size())
+		fin.read(reinterpret_cast<char *> (found.data()), n_sig*sizeof(double));
+	if (!fin || std::string(magic, 8) != "STRMGFT2" || found != expected)
+	{
+		std::cout << "\n[WARNING] MGF::LoadTable(): The interpolation table file was written for another frequency, stack-up or setting (or by an older version). Generating a new table instead." << std::endl;
 		return -1;
 	}
 
@@ -2191,6 +2227,12 @@ int MGF::LoadTable(std::vector<std::vector<table_entry<N>>> &table, std::string 
 		}
 	}
 
+	if (!fin)
+	{
+		std::cout << "\n[WARNING] MGF::LoadTable(): The interpolation table file is truncated. Generating a new table instead." << std::endl;
+		return -1;
+	}
+
 	// Generate index maps
 	GenerateTableMaps();
 	
@@ -2213,6 +2255,13 @@ int MGF::ExportTable(std::vector<std::vector<table_entry<N>>> &table, std::strin
 		return -1;
 	}
 
+	// Header identifying the configuration the table belongs to
+	fout.write("STRMGFT2", 8);
+	std::vector<double> signature = TableSignature(N);
+	int n_sig = signature.size();
+	fout.write(reinterpret_cast<char *> (&n_sig), sizeof(n_sig));
+	fout.write(reinterpret_cast<char *> (signature.data()), n_sig*sizeof(double));
+
 	// Write out header to record the total number of z_nodes
 	int N_z_nodes = 0;
 	for (int ii = 0; ii < lm.z_nodes.size(); ii++)
@@ -2229,6 +2278,7 @@ int MGF::ExportTable(std::vector<std::vector<table_entry<N>>> &table, std::strin
 				int layer;
 				double z;
 			} x;
+			std::memset(&x, 0, sizeof(x));  // no uninitialized padding bytes in the file
 
 			x.layer = ii;
 			x.z = lm.z_nodes[ii][jj];

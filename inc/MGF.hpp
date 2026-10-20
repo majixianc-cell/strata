@@ -214,6 +214,7 @@ private:
     void AppendMGFTableRho(std::vector<std::vector<table_entry<N>>> &table, int rho_idx, int rho_new_idx, bool curl = false);
     void GenerateTableMaps();
     MGF CopyWithoutTables();
+    std::vector<double> TableSignature(int entries_per_sample);
     void AddTableMapsZ(int layer_idx, int z_idx, int z_new_idx);
     void AddTableMapsRho();
 	int GetRow(double z, double zp);
