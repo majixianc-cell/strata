@@ -368,6 +368,18 @@ void DCIM::GenerateImages_TwoLevel(double z, double zp, std::vector<DCIM_images>
 	std::vector<std::vector<std::complex<double>>> K_path2;
 	GenerateSpectralSamples(smgf, K_path2, sp.krho_path2, sp.kz_path2, N2, N_components, curl_mode);
 
+	// Components whose quasistatic terms are singular at krho = 0 are sampled without extraction (see FullKernel())
+	if (s.extract_quasistatic)
+	{
+		SpectralMGF smgf_full;
+		smgf_full.Initialize(lm, f, s.components, false, false);
+		smgf_full.SetLayers(i, m);
+		smgf_full.SetSourcePoint(zp);
+		smgf_full.SetObservationPoint(z);
+		ReplaceWithFullKernel(smgf_full, K_path1, sp.krho_path1, sp.kz_path1, N1, N_components, curl_mode);
+		ReplaceWithFullKernel(smgf_full, K_path2, sp.krho_path2, sp.kz_path2, N2, N_components, curl_mode);
+	}
+
 	// ------ Generate images for each component ------
 
 	for (int ii = 0; ii < N_components; ii++)
@@ -502,6 +514,17 @@ void DCIM::GenerateImages_OneLevel(double z, double zp, std::vector<DCIM_images>
 
 	std::vector<std::vector<std::complex<double>>> K_path1;
 	GenerateSpectralSamples(smgf, K_path1, sp.krho_path1, sp.kz_path1, N1, N_components, curl_mode);
+
+	// Components whose quasistatic terms are singular at krho = 0 are sampled without extraction (see FullKernel())
+	if (s.extract_quasistatic)
+	{
+		SpectralMGF smgf_full;
+		smgf_full.Initialize(lm, f, s.components, false, false);
+		smgf_full.SetLayers(i, m);
+		smgf_full.SetSourcePoint(zp);
+		smgf_full.SetObservationPoint(z);
+		ReplaceWithFullKernel(smgf_full, K_path1, sp.krho_path1, sp.kz_path1, N1, N_components, curl_mode);
+	}
 
 	// ------ Generate images for each component ------
 
@@ -658,6 +681,19 @@ void DCIM::GenerateImages_ThreeLevel(double z, double zp, std::vector<DCIM_image
 	std::vector<std::vector<std::complex<double>>> K_path3;
 	GenerateSpectralSamples(smgf, K_path3, sp.krho_path3, sp.kz_path3, N3, N_components, curl_mode);
 
+	// Components whose quasistatic terms are singular at krho = 0 are sampled without extraction (see FullKernel())
+	if (s.extract_quasistatic)
+	{
+		SpectralMGF smgf_full;
+		smgf_full.Initialize(lm, f, s.components, false, false);
+		smgf_full.SetLayers(i, m);
+		smgf_full.SetSourcePoint(zp);
+		smgf_full.SetObservationPoint(z);
+		ReplaceWithFullKernel(smgf_full, K_path1, sp.krho_path1, sp.kz_path1, N1, N_components, curl_mode);
+		ReplaceWithFullKernel(smgf_full, K_path2, sp.krho_path2, sp.kz_path2, N2, N_components, curl_mode);
+		ReplaceWithFullKernel(smgf_full, K_path3, sp.krho_path3, sp.kz_path3, N3, N_components, curl_mode);
+	}
+
 	// ------ Generate images for each component ------
 
 	for (int ii = 0; ii < N_components; ii++)
@@ -755,6 +791,21 @@ void DCIM::GenerateImages_ThreeLevel(double z, double zp, std::vector<DCIM_image
 // ==================================================================================
 // Computational helpers
 // ==================================================================================
+
+/*! \brief Replace the samples of the components that FullKernel() selects by samples of the full kernel (smgf_full is set up without extraction).*/
+void DCIM::ReplaceWithFullKernel(SpectralMGF &smgf_full, std::vector<std::vector<std::complex<double>>> &K, std::vector<std::complex<double>> &krho, std::vector<std::complex<double>> &kz, int N, int N_components, bool curl_mode)
+{
+
+	std::vector<std::vector<std::complex<double>>> K_full;
+	GenerateSpectralSamples(smgf_full, K_full, krho, kz, N, N_components, curl_mode);
+	for (int ii = 0; ii < N_components; ii++)
+		if (FullKernel(ii, curl_mode))
+			K[ii] = K_full[ii];
+
+	return;
+
+}
+
 
 /*! \brief Helper function to generate spectral MGF samples along a given path, with a given pre-initialized spectral MGF instance.*/
 void DCIM::GenerateSpectralSamples(SpectralMGF &smgf, std::vector<std::vector<std::complex<double>>> &K, std::vector<std::complex<double>> &krho, std::vector<std::complex<double>> &kz, int N, int N_components, bool curl_mode)

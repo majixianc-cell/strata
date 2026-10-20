@@ -789,8 +789,11 @@ void MGF::ComputeMGF(double x_diff, double y_diff, double z, double zp, std::arr
 	{
 		qmgf.ComputeQMGF_Spatial(z, zp, rho);
 
+		// The DCIM fits some components to the full kernel (DCIM::FullKernel()); they get no quasistatic terms
+		bool dcim_used = (s.method == MGF_DCIM) || (s.method == MGF_INTERPOLATE && s.sampling_method == MGF_DCIM);
 		for (int jj = 0; jj < _G.size(); jj++)
-			_G[jj] += qmgf.GetResult_Spatial(jj);
+			if (!(dcim_used && dcim.FullKernel(jj, false)))
+				_G[jj] += qmgf.GetResult_Spatial(jj);
 
 		if (s.extract_singularities || std::abs(lm.k_max) < 1.0e-15)
 			ComputeSingularityFactors();
@@ -887,8 +890,10 @@ void MGF::ComputeCurlMGF(double x_diff, double y_diff, double z, double zp, std:
 	{
 		qmgf.ComputeCurlQMGF_Spatial(z, zp, rho);
 
+		bool dcim_used = (s.method == MGF_DCIM) || (s.method == MGF_INTERPOLATE && s.sampling_method == MGF_DCIM);
 		for (int jj = 0; jj < _G.size(); jj++)
-			_G[jj] += qmgf.GetResultCurl_Spatial(jj);
+			if (!(dcim_used && dcim.FullKernel(jj, true)))
+				_G[jj] += qmgf.GetResultCurl_Spatial(jj);
 	}
 	else if (s.extract_homogeneous && !s.extract_singularities)
 	{
@@ -1386,6 +1391,13 @@ void MGF::ComputeSingularityFactors()
 	F[8] = qmgf.GetSingularityFactor(3);
 	
 	F_phi = qmgf.GetSingularityFactor(4);
+
+	// Components that the DCIM fits to the full kernel (DCIM::FullKernel()) contain their singular part already
+	bool dcim_used = (s.method == MGF_DCIM) || (s.method == MGF_INTERPOLATE && s.sampling_method == MGF_DCIM);
+	if (dcim_used && dcim.FullKernel(1, false))
+		F[2] = F[5] = 0.0;
+	if (dcim_used && dcim.FullKernel(2, false))
+		F[6] = F[7] = 0.0;
 
 	singularity_factors_computed = true;
 	

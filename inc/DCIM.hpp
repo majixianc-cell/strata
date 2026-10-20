@@ -135,6 +135,16 @@ class DCIM
 	// ====== Computational helpers ======
 
 	void GenerateSpectralSamples(SpectralMGF &smgf, std::vector<std::vector<std::complex<double>>> &K, std::vector<std::complex<double>> &krho, std::vector<std::complex<double>> &kz, int N, int N_components, bool curl_mode = false);
+	void ReplaceWithFullKernel(SpectralMGF &smgf_full, std::vector<std::vector<std::complex<double>>> &K, std::vector<std::complex<double>> &krho, std::vector<std::complex<double>> &kz, int N, int N_components, bool curl_mode);
+
+	/*! \brief Whether a component is fitted to the full spectral kernel although extract_quasistatic is set. The
+	quasistatic terms of K1, K2 and of curl component 0 behave like 1/krho^2 at krho = 0, which every DCIM path reaches;
+	exponentials in kz cannot fit that, and the three-level DCIM returned these components wrong by up to 4x. MGF adds no
+	quasistatic terms to them.*/
+	bool FullKernel(int component, bool curl_mode) const
+	{
+		return s.extract_quasistatic && (curl_mode ? component == 0 : (component == 1 || component == 2));
+	}
 	void RunGPOF(std::vector<std::complex<double>> &y, double dt, std::vector<std::complex<double>> &a, std::vector<std::complex<double>> &alpha, double tol_svd = 1.0e-4, double tol_eig = 1.0e-16, int max_num_images = -1);
 
 

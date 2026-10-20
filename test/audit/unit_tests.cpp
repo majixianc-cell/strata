@@ -856,6 +856,45 @@ Reg dc_zero("DC-zero-component", "DCIM with an identically zero spectral compone
 	t.check(finite, "all components finite (Gxx=" + fmt(G[0]) + ", Gxz=" + fmt(G[2]) + ")");
 });
 
+Reg dc_qs("DC-quasistatic-levels", "DCIM with extract_quasistatic agrees with direct integration at every level", [](T &t) {
+	// With extract_quasistatic the samples far from the real axis are rounding noise; GPOF images fitted to them blew
+	// up on the lower paths (three-level DCIM: errors of 1e3-1e4 and inf in the physics checks).
+	const double f = 1e9, rho = 4e-3, z = 0.7e-3, zp = 0.3e-3;
+	auto run = [&](int method, int level, bool qs) {
+		LayerManager lm = two_layer(f);
+		std::vector<double> zn = {zp, z};
+		lm.InsertNodes_z(zn);
+		MGF mgf;
+		MGF_settings s = quiet(method);
+		s.DCIM_method = level;
+		s.extract_quasistatic = qs;
+		s.compute_curl = true;
+		mgf.Initialize(f, lm, s);
+		mgf.SetLayers(0, 0);
+		std::array<C, 9> G, H;
+		C p;
+		mgf.ComputeMGF(rho*std::cos(0.3), rho*std::sin(0.3), z, zp, G, p);
+		mgf.ComputeCurlMGF(rho*std::cos(0.3), rho*std::sin(0.3), z, zp, H);
+		std::array<C, 19> out;
+		for (int n = 0; n < 9; ++n) { out[n] = G[n]; out[10 + n] = H[n]; }
+		out[9] = p;
+		return out;
+	};
+	auto ref = run(MGF_INTEGRATE, 0, false);
+	double gs = std::max(std::abs(ref[0]), std::abs(ref[8])), hs = 0.0;
+	for (int n = 10; n < 19; ++n) hs = std::max(hs, std::abs(ref[n]));
+	for (int level : {2, 3})
+		for (bool qs : {false, true})
+		{
+			auto d = run(MGF_DCIM, level, qs);
+			double e = std::abs(d[9] - ref[9])/std::abs(ref[9]), eh = 0.0;
+			for (int n = 0; n < 9; ++n) e = std::max(e, std::abs(d[n] - ref[n])/gs);
+			for (int n = 10; n < 19; ++n) eh = std::max(eh, std::abs(d[n] - ref[n])/hs);
+			t.check(std::isfinite(e) && e < 1e-2 && std::isfinite(eh) && eh < 1e-2, "level " + std::to_string(level) +
+			        (qs ? " with" : " without") + " extract_quasistatic: max deviation " + fmt(e, 3) + ", curl " + fmt(eh, 3));
+		}
+}, 300);
+
 Reg dc_gpof("DC-gpof", "GPOF recovers exact exponentials for any pencil parameter", [](T &t) {
 	const int N = 100;
 	const double dt = 0.05;
