@@ -754,6 +754,9 @@ void SpectralMGF::ComputeKii(std::array<std::complex<double>, 5> &K)
 {
 
 	// ====== Precompute terms ======
+
+	// Never reuse exponentials cached by another routine (the curl routines evaluate them at other points).
+	exp_terms_computed = false;
 	
 	if (components[0] || components[4])
 		ComputeGVii(z, zp, GVe, GVh);
@@ -815,27 +818,28 @@ void SpectralMGF::ComputeKmi(std::array<std::complex<double>, 5> &K)
 		_I = -1.0;
 	}
 
-	std::complex<double> GVe_ii, GVh_ii, GIe_ii, GIh_ii;
+	// The source- and observer-dependent terms are cheap compared with the krho precomputations, so they are
+	// recomputed on every call. They used to be skipped whenever src_terms_computed / obs_terms_computed was already
+	// set: the source terms are local variables, so a repeated call, or setting krho before the source point, returned
+	// zeros; and the curl routines overwrite TVe, TIe and the cached exponentials, so a call after a curl computation
+	// used the wrong observer terms.
+	exp_terms_computed = false;
+	trf_terms_computed = false;
 
-	if (!src_terms_computed)
-	{
-		if (components[0] || components[2] || components[4])
-			ComputeGVii(_z, zp, GVe_ii, GVh_ii);
-		if (components[1] || components[3])
-			ComputeGIii(_z, zp, GIe_ii, GIh_ii);
-		
-		src_terms_computed = true;
-	}
+	std::complex<double> GVe_ii = 0.0, GVh_ii = 0.0, GIe_ii = 0.0, GIh_ii = 0.0;
 
-	if (!obs_terms_computed)
-	{
-		if (components[0] || components[1] || components[4])
-			ComputeTV(z, TVe, TVh);
-		if (components[2] || components[3])
-			ComputeTI(z, TIe, TIh);
-		
-		obs_terms_computed = true;
-	}
+	if (components[0] || components[2] || components[4])
+		ComputeGVii(_z, zp, GVe_ii, GVh_ii);
+	if (components[1] || components[3])
+		ComputeGIii(_z, zp, GIe_ii, GIh_ii);
+
+	if (components[0] || components[1] || components[4])
+		ComputeTV(z, TVe, TVh);
+	if (components[2] || components[3])
+		ComputeTI(z, TIe, TIh);
+
+	src_terms_computed = true;
+	obs_terms_computed = true;
 
 
 	// ====== Assemble required component(s) ======
