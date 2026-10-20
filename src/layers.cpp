@@ -559,14 +559,18 @@ void LayerManager::SetZNodesInterp(double f, std::vector<double> &z_nodes, int N
 
         double h = layers[ii].zmax - layers[ii].zmin;
 		std::complex<double> complex_epsilon = epsilon_complex(strata::eps0, layers[ii].epsr, layers[ii].sigma, (2 * M_PI * f));
-        double lambda = mu0_denom / std::sqrt(complex_epsilon).real();
+        // Wavelength in the layer, including its permeability
+        double lambda = mu0_denom / std::real(std::sqrt(complex_epsilon*layers[ii].mur));
         double electrical_size = h / lambda;
         double _Nz = N_lambda * electrical_size;
         int Nz = (int)std::round(_Nz);
 
         // Set the z-nodes based on the calculated number of interpolation points, note that each layer should at least have two nodes
-        double z_min_node = layers[ii].zmin + dis_threshold;
-        double z_max_node = layers[ii].zmax - dis_threshold;
+        // The end nodes are kept slightly inside the layer, away from the interfaces. A fixed 10 nm inset put them
+        // outside (and in reverse order) for layers thinner than 20 nm, so the inset is limited to 1% of the height.
+        double inset = std::min(dis_threshold, 0.01*h);
+        double z_min_node = layers[ii].zmin + inset;
+        double z_max_node = layers[ii].zmax - inset;
 
         // within each layer, the interpolation points are uniform
         if (Nz > 2)
@@ -609,7 +613,7 @@ void LayerManager::SetZNodesInterpGrid(double f, std::vector<double> &z_nodes, i
 
     double h = z_max - z_min;
 	std::complex<double> complex_epsilon = epsilon_complex(strata::eps0, layers[idx_layer].epsr, layers[idx_layer].sigma, (2 * M_PI * f));
-	double lambda = mu0_denom / std::sqrt(complex_epsilon).real();
+	double lambda = mu0_denom / std::real(std::sqrt(complex_epsilon*layers[idx_layer].mur));
 	double electrical_size = h / lambda;
     double _Nz = N_lambda * electrical_size;
     int Nz = (int)std::round(_Nz);
