@@ -637,6 +637,11 @@ int LayerManager::FindLayer(double z)
 	if (z < layers.back().zmin - tol)
 		return layers.size();
 
+	// The top surface of the stack belongs to the top-most layer (the loop below only recognizes the bottom surface
+	// of each layer as an interface and would otherwise fall through to the bottom-most layer).
+	if (std::abs(z - layers[0].zmax) <= tol)
+		return 0;
+
 	for (int ii = 0; ii < layers.size(); ii++)
 	{
 		if (layers[ii].zmax - z > tol && z - layers[ii].zmin > tol)
