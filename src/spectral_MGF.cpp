@@ -63,7 +63,16 @@ void SpectralMGF::Initialize(LayerManager *_lm, double _f, std::vector<bool> _co
 		lm->ProcessLayers(f);
 
 	if (extract_quasistatic)
+	{
 		qmgf.Initialize(lm, f, components);
+		// Keep the nested engine's curl type and curl mask consistent with this object's (re-initialization would
+		// otherwise leave it at the default G_EM while this object computes G_HJ).
+		qmgf.components_curl = components_curl;
+		if (curl_GEM)
+			qmgf.SetCurlToGEM();
+		else
+			qmgf.SetCurlToGHJ();
+	}
 
 	initialized = true;
 	layers_set = false;
