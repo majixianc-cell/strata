@@ -34,6 +34,7 @@
 
 #include <cmath>
 #include <complex>
+#include <limits>
 #include <stdexcept>
 
 #include "spectral_MGF.hpp"
@@ -270,11 +271,10 @@ void SpectralMGF::SetRadialWaveNumber(std::complex<double> _krho)
 	ComputeReflectionCoefficient_Upward(krho, i-1, Gri);
 	ComputeReflectionCoefficient_Downward(krho, i, Gli);
 
-	// std::complex<double> exp_term = std::exp(-jkzi*2.0*lm->layers[i].h);
-	std::complex<double> exp_term = std::exp(-jkzi*2.0*lm->GetHeight(i));
-
-	if (i == -1 || i == (int)lm->layers.size())
-		exp_term = 0.0;
+	// Multiple-reflection factor of the source layer; it only exists in a layer of finite height.
+	std::complex<double> exp_term = 0.0;
+	if (i != -1 && i != (int)lm->layers.size())
+		exp_term = std::exp(-jkzi*2.0*lm->GetHeight(i));
 
 	De = 1.0 - Gli.Ge*Gri.Ge*exp_term;
 	Dh = 1.0 - Gli.Gh*Gri.Gh*exp_term;
@@ -449,9 +449,9 @@ void SpectralMGF::ComputeHalfspaceImpedance(std::complex<double> krho)
 	else
 	{
 		Z_top.Ze = 0.0;
-		Z_top.Ye = 1.0/Z_top.Ze;
+		Z_top.Ye = std::numeric_limits<double>::infinity();
 		Z_top.Zh = 0.0;
-		Z_top.Yh = 1.0/Z_top.Zh;
+		Z_top.Yh = std::numeric_limits<double>::infinity();
 	}
 
 	std::complex<double> kz_bot = ComputeAxialWaveNumber(lm->k_bot, krho);
@@ -466,9 +466,9 @@ void SpectralMGF::ComputeHalfspaceImpedance(std::complex<double> krho)
 	else
 	{
 		Z_bot.Ze = 0.0;
-		Z_bot.Ye = 1.0/Z_bot.Ze;
+		Z_bot.Ye = std::numeric_limits<double>::infinity();
 		Z_bot.Zh = 0.0;
-		Z_bot.Yh = 1.0/Z_bot.Zh;
+		Z_bot.Yh = std::numeric_limits<double>::infinity();
 	}
 
 	return;
@@ -992,24 +992,22 @@ void SpectralMGF::ComputeExpTermsGii(double _z, double _zp, std::array<std::comp
 	double zmax = lm->GetZmax(i);
 	double h = lm->GetHeight(i);
 
+	// Image terms involving a boundary that a half-space does not have vanish; their exponentials are not evaluated
+	// (placeholder coordinates and infinite heights would overflow or give NaN).
 	_exp_terms[0] = std::exp(-jkzi*std::abs(_z - _zp));
-	_exp_terms[1] = std::exp(-jkzi*(_z + _zp - 2.0*zmin));
-	_exp_terms[2] = std::exp(-jkzi*(2.0*zmax - (_z + _zp)));
+	_exp_terms[1] = 0.0;
+	_exp_terms[2] = 0.0;
+	_cos_term = 0.0;
+	_sin_term = 0.0;
 
-	_cos_term = (std::exp(jkzi*(-2.0*h + _z - _zp)) + std::exp(-jkzi*(2.0*h + _z - _zp)))/2.0;
-	_sin_term = (std::exp(jkzi*(-2.0*h + _z - _zp)) - std::exp(-jkzi*(2.0*h + _z - _zp)))/2.0/J;
-
-	if (i == -1)
+	if (i != (int)lm->layers.size())
+		_exp_terms[1] = std::exp(-jkzi*(_z + _zp - 2.0*zmin));
+	if (i != -1)
+		_exp_terms[2] = std::exp(-jkzi*(2.0*zmax - (_z + _zp)));
+	if (i != -1 && i != (int)lm->layers.size())
 	{
-		_exp_terms[2] = 0.0;
-		_cos_term = 0.0;
-		_sin_term = 0.0;
-	}
-	else if (i == (int)lm->layers.size())
-	{
-		_exp_terms[1] = 0.0;
-		_cos_term = 0.0;
-		_sin_term = 0.0;
+		_cos_term = (std::exp(jkzi*(-2.0*h + _z - _zp)) + std::exp(-jkzi*(2.0*h + _z - _zp)))/2.0;
+		_sin_term = (std::exp(jkzi*(-2.0*h + _z - _zp)) - std::exp(-jkzi*(2.0*h + _z - _zp)))/2.0/J;
 	}
 
 	exp_terms_computed = true;
@@ -1060,15 +1058,19 @@ void SpectralMGF::ComputeTrfTerms(double _z, std::array<std::complex<double>, 2>
 
 	std::fill(_trf_terms.begin(), _trf_terms.end(), 0.0);
 	
+	// The second term is the reflection from the far boundary of the observation layer, which a half-space does not
+	// have (its zmin/zmax are placeholders; the exponential could overflow for distant points).
 	if (m < i)
 	{
 		_trf_terms[0] = std::exp(-jkzm*(_z - zmin));
-		_trf_terms[1] = std::exp(-jkzm*(2.0*zmax - _z - zmin));
+		if (m != -1)
+			_trf_terms[1] = std::exp(-jkzm*(2.0*zmax - _z - zmin));
 	}
 	else if (m > i)
 	{
 		_trf_terms[0] = std::exp(-jkzm*(zmax - _z));
-		_trf_terms[1] = std::exp(-jkzm*(_z - 2.0*zmin + zmax));
+		if (m != (int)lm->layers.size())
+			_trf_terms[1] = std::exp(-jkzm*(_z - 2.0*zmin + zmax));
 	}
 	
 	trf_terms_computed = true;
@@ -1108,10 +1110,16 @@ void SpectralMGF::ComputeM_Upward(std::complex<double> &_MVe, std::complex<doubl
 	// _MVh *= 1.0/(1.0 + Gm.Gh*std::exp(-jkzm*2.0*lm->layers[m].h));
 	// _MIe *= 1.0/(1.0 - Gm.Ge*std::exp(-jkzm*2.0*lm->layers[m].h));
 	// _MIh *= 1.0/(1.0 - Gm.Gh*std::exp(-jkzm*2.0*lm->layers[m].h));
-	_MVe *= 1.0/(1.0 + Gm.Ge*std::exp(-jkzm*2.0*lm->GetHeight(m)));
-	_MVh *= 1.0/(1.0 + Gm.Gh*std::exp(-jkzm*2.0*lm->GetHeight(m)));
-	_MIe *= 1.0/(1.0 - Gm.Ge*std::exp(-jkzm*2.0*lm->GetHeight(m)));
-	_MIh *= 1.0/(1.0 - Gm.Gh*std::exp(-jkzm*2.0*lm->GetHeight(m)));
+	// Multiple reflections inside the observation layer. A half-space has no far boundary (Gm = 0, infinite height):
+	// skip the factor instead of forming 0*exp(-j kz inf), which is NaN whenever kz is real.
+	if (m != -1 && m != (int)lm->layers.size())
+	{
+		std::complex<double> exp_m = std::exp(-jkzm*2.0*lm->GetHeight(m));
+		_MVe *= 1.0/(1.0 + Gm.Ge*exp_m);
+		_MVh *= 1.0/(1.0 + Gm.Gh*exp_m);
+		_MIe *= 1.0/(1.0 - Gm.Ge*exp_m);
+		_MIh *= 1.0/(1.0 - Gm.Gh*exp_m);
+	}
 
 	return;
 
@@ -1148,10 +1156,16 @@ void SpectralMGF::ComputeM_Downward(std::complex<double> &_MVe, std::complex<dou
 	// _MVh *= 1.0/(1.0 + Gm.Gh*std::exp(-jkzm*2.0*lm->layers[m].h));
 	// _MIe *= 1.0/(1.0 - Gm.Ge*std::exp(-jkzm*2.0*lm->layers[m].h));
 	// _MIh *= 1.0/(1.0 - Gm.Gh*std::exp(-jkzm*2.0*lm->layers[m].h));
-	_MVe *= 1.0/(1.0 + Gm.Ge*std::exp(-jkzm*2.0*lm->GetHeight(m)));
-	_MVh *= 1.0/(1.0 + Gm.Gh*std::exp(-jkzm*2.0*lm->GetHeight(m)));
-	_MIe *= 1.0/(1.0 - Gm.Ge*std::exp(-jkzm*2.0*lm->GetHeight(m)));
-	_MIh *= 1.0/(1.0 - Gm.Gh*std::exp(-jkzm*2.0*lm->GetHeight(m)));
+	// Multiple reflections inside the observation layer. A half-space has no far boundary (Gm = 0, infinite height):
+	// skip the factor instead of forming 0*exp(-j kz inf), which is NaN whenever kz is real.
+	if (m != -1 && m != (int)lm->layers.size())
+	{
+		std::complex<double> exp_m = std::exp(-jkzm*2.0*lm->GetHeight(m));
+		_MVe *= 1.0/(1.0 + Gm.Ge*exp_m);
+		_MVh *= 1.0/(1.0 + Gm.Gh*exp_m);
+		_MIe *= 1.0/(1.0 - Gm.Ge*exp_m);
+		_MIh *= 1.0/(1.0 - Gm.Gh*exp_m);
+	}
 
 	return;
 
@@ -1604,23 +1618,19 @@ void SpectralMGF::ComputeExpTermsGii_dz(double _z, double _zp, std::array<std::c
 		_exp_terms[0] = 0.0;
 	else
 		_exp_terms[0] = std::exp(-jkzi*std::abs(_z - _zp));
-	_exp_terms[1] = std::exp(-jkzi*(_z + _zp - 2.0*zmin))/(-jkzi);
-	_exp_terms[2] = std::exp(-jkzi*(2.0*zmax - (_z + _zp)))/(jkzi);
+	_exp_terms[1] = 0.0;
+	_exp_terms[2] = 0.0;
+	_cos_term = 0.0;
+	_sin_term = 0.0;
 
-	_cos_term = (std::exp(jkzi*(-2.0*h + _z - _zp))/(jkzi) + std::exp(-jkzi*(2.0*h + _z - _zp))/(-jkzi))/2.0;
-	_sin_term = (std::exp(jkzi*(-2.0*h + _z - _zp))/(jkzi) - std::exp(-jkzi*(2.0*h + _z - _zp))/(-jkzi))/2.0/J;
-
-	if (i == -1)
+	if (i != (int)lm->layers.size())
+		_exp_terms[1] = std::exp(-jkzi*(_z + _zp - 2.0*zmin))/(-jkzi);
+	if (i != -1)
+		_exp_terms[2] = std::exp(-jkzi*(2.0*zmax - (_z + _zp)))/(jkzi);
+	if (i != -1 && i != (int)lm->layers.size())
 	{
-		_exp_terms[2] = 0.0;
-		_cos_term = 0.0;
-		_sin_term = 0.0;
-	}
-	else if (i == (int)lm->layers.size())
-	{
-		_exp_terms[1] = 0.0;
-		_cos_term = 0.0;
-		_sin_term = 0.0;
+		_cos_term = (std::exp(jkzi*(-2.0*h + _z - _zp))/(jkzi) + std::exp(-jkzi*(2.0*h + _z - _zp))/(-jkzi))/2.0;
+		_sin_term = (std::exp(jkzi*(-2.0*h + _z - _zp))/(jkzi) - std::exp(-jkzi*(2.0*h + _z - _zp))/(-jkzi))/2.0/J;
 	}
 	
 	exp_terms_computed = false;
