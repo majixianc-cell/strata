@@ -178,8 +178,16 @@ def check_spectral(probe, case):
         def errs(a, b):
             scale = np.maximum(np.abs(b), 1e-9*np.max(np.abs(b)))
             return (np.abs(a - b)/np.maximum(scale, 1e-300)).tolist()
+        # Group-relative errors, as in the spatial checks: K0..K3 against the larger diagonal kernel (K1, K2 can
+        # vanish and then only show cancellation), K4 against itself, the curl against its largest component.
+        kscale = max(abs(Kr[0]), abs(Kr[3]), 1e-300)
+        K_gerr = (np.abs(Ks[:4] - Kr[:4])/kscale).tolist() + [abs(Ks[4] - Kr[4])/max(abs(Kr[4]), 1e-300)]
         row.update(K_err=errs(Ks, Kr), GHJ_err=errs(ghj, ghj_ref), GEM_err=errs(gem, gem_ref),
-                   K=[[v.real, v.imag] for v in Ks], K_ref=[[v.real, v.imag] for v in Kr])
+                   K_gerr=K_gerr, GHJ_gerr=(np.abs(ghj - ghj_ref)/max(np.max(np.abs(ghj_ref)), 1e-300)).tolist(),
+                   GEM_gerr=(np.abs(gem - gem_ref)/max(np.max(np.abs(gem_ref)), 1e-300)).tolist(),
+                   K=[[v.real, v.imag] for v in Ks], K_ref=[[v.real, v.imag] for v in Kr],
+                   GHJ=[[v.real, v.imag] for v in ghj], GHJ_ref=[[v.real, v.imag] for v in ghj_ref],
+                   GEM=[[v.real, v.imag] for v in gem], GEM_ref=[[v.real, v.imag] for v in gem_ref])
         rows.append(row)
     return rows
 
@@ -406,11 +414,12 @@ def main():
                 fh.write(json.dumps(r) + '\n')
         tol = 1e-9
         s = {}
-        for key in ('K_err', 'GHJ_err', 'GEM_err'):
-            for c in range(5 if key == 'K_err' else 4):
+        for key in ('K_err', 'GHJ_err', 'GEM_err', 'K_gerr', 'GHJ_gerr', 'GEM_gerr'):
+            for c in range(5 if key.startswith('K_') else 4):
                 errs = [r[key][c] for r in rows if key in r]
                 bad = [r for r in rows if key in r and not (r[key][c] < tol)]
-                s['%s[%d]' % (key[:-4], c)] = dict(n=len(errs), max=float(np.nanmax(errs)) if errs else None, n_fail=len(bad))
+                name = key.split('_')[0] + ('' if key.endswith('_err') else '(group)')
+                s['%s[%d]' % (name, c)] = dict(n=len(errs), max=float(np.nanmax(errs)) if errs else None, n_fail=len(bad))
         s['strata_errors'] = sum('strata_err' in r for r in rows)
         summary['spec'] = s
         print(json.dumps(s, indent=1))
