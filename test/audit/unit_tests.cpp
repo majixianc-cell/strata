@@ -1381,6 +1381,181 @@ Reg qs_hs("QS-halfspace-finite", "quasistatic terms with the source in a half-sp
 } // namespace
 
 
+// ================================================================================================
+// Source-point derivatives and K-type kernels (bie-kernels)
+// ================================================================================================
+
+void setup_spec_f(SpectralMGF &s, LayerManager &lm, double f, int i, int m, double zp, double z, C kr)
+{
+	s.Initialize(&lm, f);
+	s.SetLayers(i, m);
+	s.SetSourcePoint(zp);
+	s.SetObservationPoint(z);
+	s.SetRadialWaveNumber(kr);
+}
+
+std::array<C, 5> remainder(LayerManager &lm, double f, int i, int m, double zp, double z, C kr, bool derivative)
+{
+	SpectralMGF s;
+	setup_spec_f(s, lm, f, i, m, zp, z, kr);
+	std::array<C, 5> R;
+	s.ComputeSpectralRemainder(derivative, R);
+	return R;
+}
+
+Reg bie_remainder("BIE-remainder", "ComputeSpectralRemainder plus the direct term equals ComputeSpectralMGF", [](T &t) {
+	LayerManager lm = two_layer();
+	struct Cfg { int i, m; double zp, z; };
+	for (C kr : {C(80.0, 0.0), C(5.0, 2.5), C(3000.0, 0.0)})
+		for (Cfg c : {Cfg{0, 0, 0.7e-3, 0.3e-3}, Cfg{1, 1, -0.3e-3, -0.8e-3}, Cfg{0, 1, 0.7e-3, -0.3e-3}, Cfg{0, -1, 0.7e-3, 2e-3}})
+		{
+			SpectralMGF s;
+			setup_spec_f(s, lm, 1e9, c.i, c.m, c.zp, c.z, kr);
+			auto K = potentials(s);
+			std::array<C, 5> R;
+			s.ComputeSpectralRemainder(false, R);
+			if (c.i == c.m)
+			{
+				C ki = lm.k[c.i], kz = std::sqrt(ki*ki - kr*kr);
+				s.CheckQuadrants(kz);
+				C e0 = std::exp(-strata::J*kz*std::abs(c.z - c.zp))/(2.0*strata::J*kz);
+				R[0] += (lm.mu[c.i]/strata::mu0)*e0;
+				R[3] += (lm.mu[c.i]/strata::mu0)*e0;
+				R[4] += (strata::eps0/lm.eps[c.i])*e0;
+			}
+			double e = maxrel5(R, K);
+			t.check(e < 1e-12, "i=" + std::to_string(c.i) + " m=" + std::to_string(c.m) + " kr=" + fmt(kr, 3) + " (" + fmt(e, 3) + ")");
+		}
+});
+
+Reg bie_dzp("BIE-dzp-fd", "zp-derivatives of the spectral kernels against central differences", [](T &t) {
+	LayerManager lm = two_layer();
+	struct Cfg { int i, m; double zp, z; };
+	for (C kr : {C(80.0, 0.0), C(5.0, 2.5), C(3000.0, 0.0)})
+		for (Cfg c : {Cfg{0, 0, 0.6e-3, 0.3e-3}, Cfg{0, 0, 0.6e-3, 0.6e-3}, Cfg{1, 0, -0.4e-3, 0.7e-3}, Cfg{0, 1, 0.5e-3, -0.3e-3}, Cfg{-1, 0, 2e-3, 0.5e-3}})
+		{
+			C ki = (c.i == -1) ? lm.k_top : lm.k[c.i];
+			double h = 1e-4*std::min(0.2e-3, 1.0/std::abs(std::sqrt(ki*ki - kr*kr)));
+			std::array<std::array<C, 5>, 4> v;
+			int o = 0;
+			for (double s : {-2.0, -1.0, 1.0, 2.0})
+				v[o++] = remainder(lm, 1e9, c.i, c.m, c.zp + s*h, c.z, kr, false);
+			auto d = remainder(lm, 1e9, c.i, c.m, c.zp, c.z, kr, true);
+			auto r0 = remainder(lm, 1e9, c.i, c.m, c.zp, c.z, kr, false);
+			double e = 0.0;
+			for (int k = 0; k < 5; ++k)
+			{
+				C fd = (v[0][k] - 8.0*v[1][k] + 8.0*v[2][k] - v[3][k])/(12.0*h);
+				double scale = std::max(std::abs(d[k]), std::abs(kr*r0[k]));
+				e = std::max(e, std::abs(fd - d[k])/std::max(scale, 1e-300));
+			}
+			t.check(e < 1e-6, "i=" + std::to_string(c.i) + " m=" + std::to_string(c.m) + " kr=" + fmt(kr, 3) + " (" + fmt(e, 3) + ")");
+		}
+});
+
+Reg bie_kr_pde("BIE-kr-pde", "K^R satisfies (d2/dzp2 - krho^2 + kc^2) K^R = R and its zp-derivative", [](T &t) {
+	struct Cfg { int i, m; double zp, z; };
+	for (double f : {1e3, 1e9})
+	{
+		LayerManager lm = two_layer(f);
+		for (double sigma : {1e4, 5.8e7})
+			for (C kr : {C(80.0, 0.0), C(3000.0, 0.0), C(0.5*std::abs(lm.k_max), 0.25*std::abs(lm.k_max))})
+				for (Cfg c : {Cfg{0, 0, 0.6e-3, 0.3e-3}, Cfg{1, 0, -0.4e-3, 0.7e-3}, Cfg{-1, 0, 2e-3, 0.5e-3}})
+				{
+					C ki = (c.i == -1) ? lm.k_top : lm.k[c.i];
+					C mui = (c.i == -1) ? lm.mu_top : lm.mu[c.i];
+					C dk2 = -strata::J*2.0*M_PI*f*mui*sigma;
+					C kc2 = ki*ki + dk2;
+					double h = 1e-2*std::min({0.2e-3, 1.0/std::abs(std::sqrt(ki*ki - kr*kr)), 1.0/std::abs(std::sqrt(kc2 - kr*kr))});
+					auto KR = [&](double zp, std::array<C, 4> &K, std::array<C, 4> &dK, std::array<C, 5> &R)
+						{
+							SpectralMGF s;
+							setup_spec_f(s, lm, f, c.i, c.m, zp, c.z, kr);
+							s.SetConductorContrast(dk2);
+							s.ComputeSpectralKR();
+							s.ComputeSpectralRemainder(false, R);
+							for (int k = 0; k < 4; ++k) { K[k] = s.GetResultKR(k); dK[k] = s.GetResultKRSourceDerivative(k); }
+						};
+					std::array<std::array<C, 4>, 5> K, dK;
+					std::array<C, 5> R, Rdummy;
+					for (int o = 0; o < 5; ++o)
+						KR(c.zp + (o - 2)*h, K[o], dK[o], (o == 2) ? R : Rdummy);
+					double ep = 0.0, ed = 0.0;
+					for (int k = 0; k < 4; ++k)
+					{
+						C d2 = (-K[4][k] + 16.0*K[3][k] - 30.0*K[2][k] + 16.0*K[1][k] - K[0][k])/(12.0*h*h);
+						C res = d2 - kr*kr*K[2][k] + kc2*K[2][k] - R[k];
+						ep = std::max(ep, std::abs(res)/std::max(std::abs(R[k]) + std::abs(kc2*K[2][k]), 1e-300));
+						C d1 = (-K[4][k] + 8.0*K[3][k] - 8.0*K[1][k] + K[0][k])/(12.0*h);
+						ed = std::max(ed, std::abs(d1 - dK[2][k])/std::max(std::abs(dK[2][k]), 1e-300));
+					}
+					std::string tag = "f=" + fmt(f, 2) + " sigma=" + fmt(sigma, 2) + " i=" + std::to_string(c.i) + " m=" + std::to_string(c.m) + " kr=" + fmt(kr, 3);
+					t.check(ep < 1e-6 && ed < 1e-6, tag + " (pde " + fmt(ep, 3) + ", d/dzp " + fmt(ed, 3) + ")");
+				}
+	}
+}, 300);
+
+Reg bie_kr_homog("BIE-kr-homogeneous", "K^R vanishes in a homogeneous medium", [](T &t) {
+	LayerManager lm = homogeneous(2.0, 1.0, 0.0, 0.0, 1e-3, 1e6);
+	SpectralMGF s;
+	setup_spec_f(s, lm, 1e6, 0, 0, 0.6e-3, 0.3e-3, C(500.0, 0.0));
+	s.SetConductorContrast(-strata::J*2.0*M_PI*1e6*strata::mu0*5.8e7);
+	s.ComputeSpectralKR();
+	double m = 0.0;
+	for (int k = 0; k < 4; ++k) m = std::max({m, std::abs(s.GetResultKR(k)), std::abs(s.GetResultKRSourceDerivative(k))});
+	// The reflection coefficients vanish (up to rounding of the impedances); K^R would be ~1e-9 for |Gamma| ~ 1
+	t.check(m < 1e-20, "max |K^R|, |dK^R/dzp| = " + fmt(m, 3));
+});
+
+Reg bie_state("BIE-state", "remainder and K^R calls leave the potentials and curls of the object unchanged", [](T &t) {
+	LayerManager lm = two_layer();
+	const C kr(80.0, 10.0);
+	struct Cfg { int i, m; double zp, z; };
+	for (Cfg c : {Cfg{0, 0, 0.7e-3, 0.3e-3}, Cfg{0, 1, 0.7e-3, -0.3e-3}})
+	{
+		SpectralMGF fresh;
+		setup_spec_f(fresh, lm, 1e9, c.i, c.m, c.zp, c.z, kr);
+		auto ref = potentials(fresh);
+		fresh.ComputeCurlSpectralMGF();
+		std::array<C, 4> cref;
+		for (int k = 0; k < 4; ++k) cref[k] = fresh.GetResultCurl(k);
+		SpectralMGF s;
+		setup_spec_f(s, lm, 1e9, c.i, c.m, c.zp, c.z, kr);
+		std::array<C, 5> R;
+		s.ComputeSpectralRemainder(true, R);
+		s.SetConductorContrast(-strata::J*2.0*M_PI*1e9*strata::mu0*1e4);
+		s.ComputeSpectralKR();
+		auto K = potentials(s);
+		s.ComputeCurlSpectralMGF();
+		double e = maxrel5(K, ref), ec = 0.0;
+		for (int k = 0; k < 4; ++k) ec = std::max(ec, rel(s.GetResultCurl(k), cref[k]));
+		t.check(e == 0.0 && ec == 0.0, "i=" + std::to_string(c.i) + " m=" + std::to_string(c.m) + " (potentials " + fmt(e, 3) + ", curl " + fmt(ec, 3) + ")");
+	}
+});
+
+Reg bie_grad_values("BIE-grad-values", "values of ComputeMGF_SourceGradient equal ComputeMGF", [](T &t) {
+	LayerManager lm = two_layer();
+	MGF_settings st = quiet(MGF_INTEGRATE);
+	st.tol_quadrature = 1e-10;
+	MGF mgf;
+	mgf.Initialize(1e9, lm, st);
+	struct Cfg { int i, m; double x, y, zp, z; };
+	for (Cfg c : {Cfg{0, 0, 0.4e-3, 0.2e-3, 0.7e-3, 0.3e-3}, Cfg{0, 1, 0.3e-3, -0.1e-3, 0.7e-3, -0.4e-3}, Cfg{0, 0, 0.0, 0.0, 0.7e-3, 0.2e-3}})
+	{
+		mgf.SetLayers(c.i, c.m);
+		std::array<C, 9> G, Gg;
+		std::array<C, 27> dG;
+		std::array<C, 3> dphi;
+		C phi, phig;
+		mgf.ComputeMGF(c.x, c.y, c.z, c.zp, G, phi);
+		mgf.ComputeMGF_SourceGradient(c.x, c.y, c.z, c.zp, Gg, phig, dG, dphi);
+		double e = rel(phig, phi), scale = 0.0;
+		for (int k = 0; k < 9; ++k) scale = std::max(scale, std::abs(G[k]));
+		for (int k = 0; k < 9; ++k) e = std::max(e, std::abs(Gg[k] - G[k])/scale);
+		t.check(e < 1e-8, "i=" + std::to_string(c.i) + " m=" + std::to_string(c.m) + " (" + fmt(e, 3) + ")");
+	}
+}, 300);
+
 int main(int argc, char **argv)
 {
 	std::string filter = argc > 1 ? argv[1] : "";

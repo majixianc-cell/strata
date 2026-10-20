@@ -92,6 +92,30 @@ The functionality of Strata can be divided into the computation of the MGF in (a
 
    To easily incorporate into existing codes, one can also extract out the singular behaviour of the MGF, so that the singularities can be treated separately.
 
+### c) Source-point gradients and K-type kernels (branch `bie-kernels`)
+
+   For boundary integral formulations whose unknowns are the traces of the field inside a conductor, the vector potential
+   of the volume current, mu0 int G<sup>(A)</sup> . sigma E dV', has to be written as a surface integral. With the
+   method `MGF_INTEGRATE` (nonzero frequency):
+
+   * `MGF::ComputeMGF_SourceGradient(x_diff, y_diff, z, zp, G, G_phi, dG, dG_phi, include_direct)` returns
+     **G<sup>(A)</sup>**, G<sup>(&#966;)</sup> and their gradients with respect to the source point
+     (`dG[9*c + j]` = dG[j]/dx'_c, c = 0, 1, 2 for x', y', z'). The part without the direct term of the source layer is
+     integrated; the direct term is added in closed form (or left out with `include_direct = false`). n'.grad' G<sup>(&#966;)</sup>
+     is the kernel of the double layer of the scalar potential.
+   * `MGF::ComputeKR(x_diff, y_diff, z, zp, sigma_c, KR, dKR)` returns the K-type kernel K<sup>R</sup> of the non-direct
+     part G<sup>R</sup> of **G<sup>(A)</sup>**, (lap' + kc<sup>2</sup>) K<sup>R</sup> = G<sup>R</sup> for source points
+     in the source layer, kc<sup>2</sup> = ki<sup>2</sup> - j omega mu_i sigma_c, and its source-point gradient. If E is
+     divergence-free with (lap + kc<sup>2</sup>) E = 0 in a conductor V of that layer, the vector potential of sigma_c E
+     due to G<sup>R</sup> is mu0 sigma_c times oint [k_a . (n' x curl' E) + (n' x E) . (curl' k_a) + (n' . E) div' k_a] dS',
+     k_a being row a of K<sup>R</sup>; the direct term is handled with the free-space kernel (G_ki - G_kc)/(kc<sup>2</sup> - ki<sup>2</sup>).
+     K<sup>R</sup> is built in the spectral domain from the two source-layer exponentials by an amplitude-frozen divided
+     difference in k<sup>2</sup>, which keeps it bounded at low frequency.
+
+   Neither uses quasistatic extraction (the non-direct part has no singularity inside the source layer, so its spectral
+   integral converges exponentially unless a point lies on an interface); DCIM and interpolation tables are not
+   available for them yet.
+
 Strata is written with modularity and readability as a priority, to allow users to incorporate new formulations and extend the functionality in both spectral and spatial domains.
 
 ## Citing Strata
