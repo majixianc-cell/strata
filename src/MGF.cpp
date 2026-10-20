@@ -772,6 +772,12 @@ void MGF::ComputeCurlMGF(double x_diff, double y_diff, double z, double zp, std:
 		throw std::logic_error("[ERROR] MGF::ComputeCurlMGF(): Must call MGF::SetLayers() before computing the MGF.");
 	}
 
+	// The DCIM images and the interpolation table of the curl only exist if they were requested at initialization
+	if ((s.method == MGF_DCIM || s.method == MGF_INTERPOLATE) && !s.compute_curl)
+	{
+		throw std::logic_error("[ERROR] MGF::ComputeCurlMGF(): The curl was not precomputed; set compute_curl = true in the settings before MGF::Initialize().");
+	}
+
 	// if ((z > lm.layers[0].zmax || z < lm.layers.back().zmin) ||
 	// 	(zp > lm.layers[0].zmax || zp < lm.layers.back().zmin))
 	// {

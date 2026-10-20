@@ -198,6 +198,11 @@ std::vector<DCIM_images>& DCIM::GetImages(double z, double zp, bool curl_mode)
 		throw std::logic_error("[ERROR] DCIM:GetImages(): Images have not been generated. Call DCIM::GenerateImages() first.");
 	}
 
+	if (curl_mode && imc.size() != im.size())
+	{
+		throw std::logic_error("[ERROR] DCIM:GetImages(): Images for the curl have not been generated. Set compute_curl in the DCIM settings.");
+	}
+
 
 	// ====== Locate the index of the z-node nearest to z ======
 
