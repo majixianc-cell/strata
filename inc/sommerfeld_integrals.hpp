@@ -359,9 +359,14 @@ inline std::complex<double> SommerfeldIntegrandFamily(SpectralMGF &smgf, double 
 }
 
 
-/*! \brief Spectral far-field integral of f(krho) from a to infinity along the real axis (path of IntegrateSpectralFarField()).*/
+/*! \brief Spectral far-field integral of f(krho) from a to infinity along the real axis (path of IntegrateSpectralFarField()).
+
+decay > 0 is a length over which the integrand is known to decay at least like exp(-krho decay). The partition
+extrapolation then only starts once that decay has made the integrand negligible (at 40/decay, if this lies within 800
+half periods): with a power of krho above 1 the integrand grows beyond the first zero of J_order for rho >> decay, and
+an extrapolation started there was off by up to 6e-6 (lateral derivative of G_zz with rho = 33 um, decay = 5.8 um).*/
 template<class F>
-std::complex<double> IntegrateFarFieldGeneric(const F &f, double rho, int order, double a, double tol)
+std::complex<double> IntegrateFarFieldGeneric(const F &f, double rho, int order, double a, double tol, double decay = -1.0)
 {
 
 	if (rho < 1.0e-15)
@@ -397,6 +402,26 @@ std::complex<double> IntegrateFarFieldGeneric(const F &f, double rho, int order,
 		bridge += part;
 		left = right;
 		width *= 2.0;
+	}
+
+	// Integrate on half periods until the known decay has made the integrand negligible; the extrapolation starts at the
+	// next zero of J_order beyond that point.
+	if (decay > 0.0)
+	{
+		double target = 40.0/decay;
+		if (target > b && (target - b)/(0.5*q) <= 800.0)
+		{
+			double start = BesselJ_NextZero(order, target*rho)/rho;
+			while (left < start)
+			{
+				double right = std::min(start, left + 0.5*q);
+				std::complex<double> part = 0.0;
+				GaussKronrodBoost(f, left, right, tol, part);
+				bridge += part;
+				left = right;
+			}
+			b = left;
+		}
 	}
 
 	std::complex<double> result = 0.0;
@@ -456,6 +481,23 @@ std::complex<double> IntegrateNearFieldGeneric(const F &f, double rho, double km
 }
 
 
+/*! \brief Length over which every kernel family above decays at least like exp(-krho d) for large krho: the families
+contain no direct term, so within the source layer the nearest image, min(z + zp - 2 zmin, 2 zmax - z - zp), and across
+layers the vertical distance |z - zp| (the transmitted wave crosses it). Nonpositive when a point lies on a boundary.*/
+inline double FamilyDecayLength(SpectralMGF &smgf)
+{
+	const int N = (int)smgf.lm->layers.size();
+	if (smgf.i != smgf.m)
+		return std::abs(smgf.z - smgf.zp);
+	double d = std::numeric_limits<double>::infinity();
+	if (smgf.i != N)
+		d = std::min(d, smgf.z + smgf.zp - 2.0*smgf.lm->GetZmin(smgf.i));
+	if (smgf.i != -1)
+		d = std::min(d, 2.0*smgf.lm->GetZmax(smgf.i) - smgf.z - smgf.zp);
+	return std::isfinite(d) ? d : -1.0;
+}
+
+
 /*! \brief Spatial integral T[family, component] = (1/2 pi) int J_order(krho rho) K krho^power dkrho of a kernel family.*/
 inline std::complex<double> IntegrateSpectralFamily(SpectralMGF &smgf, double rho, int family, int component, int order, int power, double a, double tol)
 {
@@ -463,7 +505,7 @@ inline std::complex<double> IntegrateSpectralFamily(SpectralMGF &smgf, double rh
 		{
 			return SommerfeldIntegrandFamily(smgf, rho, krho, family, component, order, power);
 		};
-	return IntegrateFarFieldGeneric(f, rho, order, a, tol) + IntegrateNearFieldGeneric(f, rho, std::abs(smgf.lm->k_max), a, tol);
+	return IntegrateFarFieldGeneric(f, rho, order, a, tol, FamilyDecayLength(smgf)) + IntegrateNearFieldGeneric(f, rho, std::abs(smgf.lm->k_max), a, tol);
 }
 
 
