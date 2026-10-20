@@ -178,6 +178,7 @@ void LayerManager::ProcessTechFile_yaml(std::string tech_file, double units)
 	if (const YAML::Node &top = node["top_halfspace"])
 	{
 		_epsr_top = top["epsr"].as<double> (1.0);
+		epsr_im_top = top["epsr_im"].as<double> (0.0);
 		_mur_top = top["mur"].as<double> (1.0);
 		_sigma_top = top["sigma"].as<std::string>("")=="inf" ? -1 : top["sigma"].as<double> (0.0);
 
@@ -194,6 +195,7 @@ void LayerManager::ProcessTechFile_yaml(std::string tech_file, double units)
 	if (const YAML::Node &bot = node["bottom_halfspace"])
 	{
 		_epsr_bot = bot["epsr"].as<double> (1.0);
+		epsr_im_bot = bot["epsr_im"].as<double> (0.0);
 		_mur_bot = bot["mur"].as<double> (1.0);
 		_sigma_bot = bot["sigma"].as<std::string>("")=="inf" ? -1 : bot["sigma"].as<double> (0.0);
 
@@ -455,8 +457,8 @@ void LayerManager::ProcessLayers(double f)
 
 	// ------ Half space parameters ------
 
-	eps_top = epsilon_complex(eps0, {epsr_top, 0.0}, sigma_top, omega);
-	eps_bot = epsilon_complex(eps0, {epsr_bot, 0.0}, sigma_bot, omega);
+	eps_top = epsilon_complex(eps0, {epsr_top, epsr_im_top}, sigma_top, omega);
+	eps_bot = epsilon_complex(eps0, {epsr_bot, epsr_im_bot}, sigma_bot, omega);
 	
 	mu_top = std::complex<double> ((mur_top * mu0), 0.0);
 	mu_bot = std::complex<double> ((mur_bot * mu0), 0.0);
