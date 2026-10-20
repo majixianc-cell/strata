@@ -137,7 +137,12 @@ public:
 	
 	std::complex<double> GetSingularityFactor(int component);
 
-	
+	// Source-point gradients and K-type kernels for volume-to-surface maps (method MGF_INTEGRATE only). The derivatives
+	// are with respect to the source point: dG[9*c + j] = dG[j]/dx'_c, c = 0, 1, 2 for x', y', z'.
+	void ComputeMGF_SourceGradient(double x_diff, double y_diff, double z, double zp, std::array<std::complex<double>, 9> &G, std::complex<double> &G_phi, std::array<std::complex<double>, 27> &dG, std::array<std::complex<double>, 3> &dG_phi, bool include_direct = true);
+	void ComputeKR(double x_diff, double y_diff, double z, double zp, std::complex<double> sigma_c, std::array<std::complex<double>, 9> &KR, std::array<std::complex<double>, 27> &dKR);
+
+
 	// ============ Computational drivers ============
 
 	template<std::size_t N>

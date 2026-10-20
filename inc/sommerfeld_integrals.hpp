@@ -319,6 +319,155 @@ inline std::complex<double> IntegrateSpectralNearField(SpectralMGF &smgf, double
 
 
 // ==================================================================================
+// Kernel families for source-point derivatives and K-type kernels
+// ==================================================================================
+// The integrators above are kept as they are; the ones below repeat their paths for any integrand f(krho), with the
+// Bessel order and the power of krho chosen independently (lateral derivatives need e.g. T0[krho^2 K] and T2[krho^2 K]).
+
+const int SI_REMAINDER = 2;      // SpectralMGF::ComputeSpectralRemainder(false): K[0..4] without the direct term
+const int SI_REMAINDER_DZP = 3;  // ... their derivatives with respect to zp
+const int SI_KR = 4;             // SpectralMGF::ComputeSpectralKR(): K-type kernels K^R[0..3]
+const int SI_KR_DZP = 5;         // ... their derivatives with respect to zp
+
+
+/*! \brief Spectral kernel of a family at krho.*/
+inline std::complex<double> SpectralKernelFamily(SpectralMGF &smgf, std::complex<double> krho, int family, int component)
+{
+	smgf.SetRadialWaveNumber(krho);
+	if (family == SI_REMAINDER || family == SI_REMAINDER_DZP)
+	{
+		std::array<std::complex<double>, 5> R;
+		smgf.ComputeSpectralRemainder(family == SI_REMAINDER_DZP, R);
+		return R[component];
+	}
+	if (family == SI_KR || family == SI_KR_DZP)
+	{
+		smgf.ComputeSpectralKR();
+		return (family == SI_KR) ? smgf.GetResultKR(component) : smgf.GetResultKRSourceDerivative(component);
+	}
+	throw std::invalid_argument("[ERROR] SpectralKernelFamily(): Unknown kernel family.");
+}
+
+
+/*! \brief Integrand J_order(krho rho) K krho^power/(2 pi) for a kernel family.*/
+inline std::complex<double> SommerfeldIntegrandFamily(SpectralMGF &smgf, double rho, std::complex<double> krho, int family, int component, int order, int power)
+{
+	std::complex<double> K = SpectralKernelFamily(smgf, krho, family, component);
+	std::complex<double> Jv;
+	BesselJ_Amos(order, krho, rho, Jv);
+	return Jv*K*std::pow(krho, power)/2.0/M_PI;
+}
+
+
+/*! \brief Spectral far-field integral of f(krho) from a to infinity along the real axis (path of IntegrateSpectralFarField()).*/
+template<class F>
+std::complex<double> IntegrateFarFieldGeneric(const F &f, double rho, int order, double a, double tol)
+{
+
+	if (rho < 1.0e-15)
+	{
+		std::complex<double> result = 0.0;
+		double left = a, width = (a > 0.0) ? a : 1.0;
+		for (int panel = 0, negligible = 0; panel < 200 && negligible < 3; panel++)
+		{
+			std::complex<double> part = 0.0;
+			GaussKronrodBoost(f, left, left + width, tol, part);
+			result += part;
+			negligible = (std::abs(part) <= tol*std::abs(result)) ? negligible + 1 : 0;
+			left += width;
+			width *= 2.0;
+		}
+		std::complex<double> tail = 0.0;
+		GaussKronrodBoost(f, left, std::numeric_limits<double>::infinity(), tol, tail);
+		result += tail;
+		CheckComplexResultForInfOrNaN(result, "the direct Gauss-Kronrod integration result");
+		return result;
+	}
+
+	double b = BesselJ_NextZero(order, a*rho)/rho;
+	double q = M_PI/rho;
+
+	std::complex<double> bridge = 0.0;
+	double left = a, width = std::max(a, std::ldexp(b, -60));
+	while (left < b)
+	{
+		double right = std::min(b, left + width);
+		std::complex<double> part = 0.0;
+		GaussKronrodBoost(f, left, right, tol, part);
+		bridge += part;
+		left = right;
+		width *= 2.0;
+	}
+
+	std::complex<double> result = 0.0;
+	PartExtrap(f, b, q, tol, result);
+
+	CheckComplexResultForInfOrNaN(result, "the partition-extrapolated tail result");
+	CheckComplexResultForInfOrNaN(bridge, "the Gauss-Kronrod bridge integration result");
+	return result + bridge;
+
+}
+
+
+/*! \brief Spectral near-field integral of f(krho) over the rectangular detour from 0 to a (path of IntegrateSpectralNearField()).*/
+template<class F>
+std::complex<double> IntegrateNearFieldGeneric(const F &f, double rho, double kmax_abs, double a, double tol)
+{
+
+	const std::complex<double> J (0.0, 1.0);
+
+	double h = 0.5*kmax_abs;
+	if (rho > 0.0)
+		h = std::min(h, 1.0/rho);
+	h = std::max(h, 1.0e-3*kmax_abs);
+	double krho_real, krho_imag;
+
+	auto f_real = [&f, &krho_imag, &J](double _krho_real) -> std::complex<double>
+		{
+			return f(_krho_real + J*krho_imag);
+		};
+	auto f_imag = [&f, &krho_real, &J](double _krho_imag) -> std::complex<double>
+		{
+			return f(krho_real + J*_krho_imag);
+		};
+
+	std::complex<double> first_path = 0.0;
+	krho_real = 0.0;
+	GaussKronrodBoost(f_imag, 0.0, h, tol, first_path);
+
+	std::complex<double> second_path = 0.0;
+	krho_imag = h;
+	double half_periods = (rho > 0.0) ? std::ceil(a*rho/M_PI) : 1.0;
+	int panels = (int)std::min(std::max(half_periods, 1.0), 1.0e5);
+	double width = a/panels;
+	for (int p = 0; p < panels; p++)
+	{
+		std::complex<double> part = 0.0;
+		GaussKronrodBoost(f_real, p*width, (p + 1)*width, tol, part);
+		second_path += part;
+	}
+
+	std::complex<double> third_path = 0.0;
+	krho_real = a;
+	GaussKronrodBoost(f_imag, h, 0.0, tol, third_path);
+
+	return (J*first_path + second_path + J*third_path);
+
+}
+
+
+/*! \brief Spatial integral T[family, component] = (1/2 pi) int J_order(krho rho) K krho^power dkrho of a kernel family.*/
+inline std::complex<double> IntegrateSpectralFamily(SpectralMGF &smgf, double rho, int family, int component, int order, int power, double a, double tol)
+{
+	auto f = [&smgf, rho, family, component, order, power](std::complex<double> krho) -> std::complex<double>
+		{
+			return SommerfeldIntegrandFamily(smgf, rho, krho, family, component, order, power);
+		};
+	return IntegrateFarFieldGeneric(f, rho, order, a, tol) + IntegrateNearFieldGeneric(f, rho, std::abs(smgf.lm->k_max), a, tol);
+}
+
+
+// ==================================================================================
 // Partition-extrapolation integration routines
 // ==================================================================================
 

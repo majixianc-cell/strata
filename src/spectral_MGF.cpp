@@ -451,6 +451,143 @@ std::complex<double> SpectralMGF::GetResultCurl(int component)
 
 
 // ==================================================================================
+// Source-point derivatives and K-type kernels
+// ==================================================================================
+
+namespace
+{
+	/*! \brief (exp(x) - 1)/x without cancellation for small |x|: exp(x) - 1 = (expm1(a) cos b - 2 sin^2(b/2)) + j exp(a) sin b.*/
+	std::complex<double> Phi1(std::complex<double> x)
+	{
+		if (x == std::complex<double>(0.0, 0.0))
+			return 1.0;
+		double a = x.real(), b = x.imag(), s = std::sin(0.5*b);
+		std::complex<double> em1(std::expm1(a)*std::cos(b) - 2.0*s*s, std::exp(a)*std::sin(b));
+		return em1/x;
+	}
+}
+
+
+/*! \brief Spectral kernels K[0..4] (normalized as in ComputeSpectralMGF()) without the direct term of the source layer
+and without any quasistatic or homogeneous extraction, or, with derivative = true, their derivatives with respect to the
+source height zp. Across layers there is no direct term and the full kernels are returned. The quasistatic and
+homogeneous extraction settings of the object are not used.*/
+void SpectralMGF::ComputeSpectralRemainder(bool derivative, std::array<std::complex<double>, 5> &R)
+{
+
+	if (!src_point_set || !obs_point_set)
+	{
+		throw std::logic_error("[ERROR] SpectralMGF::ComputeSpectralRemainder(): Must call SetSourcePoint() and SetObservationPoint() first.");
+	}
+
+	if (!precomputations_done)
+	{
+		throw std::logic_error("[ERROR] SpectralMGF::ComputeSpectralRemainder(): Must call SetRadialWaveNumber() first.");
+	}
+
+	std::vector<bool> components_saved = components;
+	components = {1, 1, 1, 1, 1};
+	drop_direct = true;
+	zp_derivative = derivative;
+	exp_terms_computed = false;
+
+	std::fill(R.begin(), R.end(), 0.0);
+	if (i == m)
+		ComputeKii(R);
+	else
+		ComputeKmi(R);
+
+	drop_direct = false;
+	zp_derivative = false;
+	exp_terms_computed = false;
+	components = components_saved;
+
+	R[0] *= 1.0/J/omega/mu0;
+	R[1] *= -mui/J/omega/epsm/mu0;
+	R[2] *= -1.0/J/omega/mu0;
+	R[3] *= mum/J/omega/epsi/mu0;
+	R[4] *= J*omega*eps0;
+
+	return;
+
+}
+
+
+/*! \brief Set kc^2 - ki^2 for a conductor in the source layer, e.g. -j omega mu_i sigma (exp(+j omega t)).*/
+void SpectralMGF::SetConductorContrast(std::complex<double> _dk2)
+{
+	dk2 = _dk2;
+	conductor_set = true;
+	return;
+}
+
+
+/*! \brief K-type kernels of the vector-potential components K[0..3]: (lap' + kc^2) K^R = R for the non-direct part R
+(ComputeSpectralRemainder()), with kc^2 = ki^2 + dk2, and their derivatives with respect to zp.
+
+Within the source layer R depends on zp only through f_-(zp) = exp(-j kz (zp - zmin)) and f_+(zp) = exp(-j kz (zmax - zp)),
+R = a + b with a ~ f_-, b ~ f_+, so that a = (j kz R - R')/(2 j kz) and b = (j kz R + R')/(2 j kz) (R' = dR/dzp). Each
+exponential is replaced by its divided difference with respect to k^2, the amplitude being kept:
+K^R = a psi(zp - zmin) + b psi(zmax - zp), psi(d) = (1 - exp(-j Delta d))/dk2, Delta = kzc - kzi = dk2/(kzc + kzi).
+Then (d^2/dzp^2 - krho^2 + kc^2) K^R = R. Unlike R/dk2, psi stays bounded as the frequency goes to zero.*/
+void SpectralMGF::ComputeSpectralKR()
+{
+
+	if (!conductor_set)
+	{
+		throw std::logic_error("[ERROR] SpectralMGF::ComputeSpectralKR(): Must call SetConductorContrast() first.");
+	}
+	if (!(std::abs(dk2) > 0.0))
+	{
+		throw std::domain_error("[ERROR] SpectralMGF::ComputeSpectralKR(): kc^2 - ki^2 must not vanish (conductor at a nonzero frequency).");
+	}
+
+	std::array<std::complex<double>, 5> R, Rp;
+	ComputeSpectralRemainder(false, R);
+	ComputeSpectralRemainder(true, Rp);
+
+	std::complex<double> kc = std::sqrt(ki*ki + dk2);
+	std::complex<double> kzc = ComputeAxialWaveNumber(kc, krho);
+	std::complex<double> s = kzc + kzi;
+	std::complex<double> Delta = dk2/s;
+
+	// A half-space has a single boundary: the top half-space only reflects from below (a), the bottom one from above (b)
+	const int N = (int)lm->layers.size();
+	bool lower = (i != N), upper = (i != -1);
+	double dm = lower ? zp - lm->GetZmin(i) : 0.0;
+	double dp = upper ? lm->GetZmax(i) - zp : 0.0;
+
+	std::complex<double> psi_m = J*dm*Phi1(-J*Delta*dm)/s, psi_p = J*dp*Phi1(-J*Delta*dp)/s;
+	std::complex<double> dpsi_m = J*std::exp(-J*Delta*dm)/s, dpsi_p = J*std::exp(-J*Delta*dp)/s;
+
+	for (int c = 0; c < 4; c++)
+	{
+		std::complex<double> a = lower ? (jkzi*R[c] - Rp[c])/(2.0*jkzi) : 0.0;
+		std::complex<double> b = upper ? (jkzi*R[c] + Rp[c])/(2.0*jkzi) : 0.0;
+		KR[c] = a*psi_m + b*psi_p;
+		dKR[c] = -jkzi*a*psi_m + a*dpsi_m + jkzi*b*psi_p - b*dpsi_p;
+	}
+
+	return;
+
+}
+
+
+/*! \brief Extract the K-type kernels computed by ComputeSpectralKR().*/
+std::complex<double> SpectralMGF::GetResultKR(int component)
+{
+	return KR[component];
+}
+
+
+/*! \brief Extract the zp-derivatives of the K-type kernels computed by ComputeSpectralKR().*/
+std::complex<double> SpectralMGF::GetResultKRSourceDerivative(int component)
+{
+	return dKR[component];
+}
+
+
+// ==================================================================================
 // Precomputation
 // ==================================================================================
 
@@ -1029,6 +1166,33 @@ void SpectralMGF::ComputeExpTermsGii(double _z, double _zp, std::array<std::comp
 	{
 		_cos_term = (std::exp(jkzi*(-2.0*h + _z - _zp)) + std::exp(-jkzi*(2.0*h + _z - _zp)))/2.0;
 		_sin_term = (std::exp(jkzi*(-2.0*h + _z - _zp)) - std::exp(-jkzi*(2.0*h + _z - _zp)))/2.0/J;
+	}
+
+	// Set only by ComputeSpectralRemainder(). These terms carry the whole zp dependence of the kernels (across layers
+	// through the source terms, evaluated at the boundary of the source layer facing the observer), so the kernels
+	// assembled from them are the d/dzp kernels.
+	if (drop_direct && i == m)
+		_exp_terms[0] = 0.0;
+	if (zp_derivative)
+	{
+		// Direct term exp(-j kz |z - zp|): within the source layer the sign of z - zp (0 on the source plane); across
+		// layers z is the boundary facing the observer and zp lies on the other side of it (or on it): one-sided sign
+		// +1 for the upper boundary (observer above), -1 for the lower one.
+		double sgn;
+		if (i == m)
+			sgn = (_z > _zp) ? 1.0 : ((_z < _zp) ? -1.0 : 0.0);
+		else
+			sgn = (m < i) ? 1.0 : -1.0;
+		_exp_terms[0] *= jkzi*sgn;
+		_exp_terms[1] *= -jkzi;
+		_exp_terms[2] *= jkzi;
+		if (i != -1 && i != (int)lm->layers.size())
+		{
+			std::complex<double> ea = std::exp(jkzi*(-2.0*h + _z - _zp));
+			std::complex<double> eb = std::exp(-jkzi*(2.0*h + _z - _zp));
+			_cos_term = (-jkzi*ea + jkzi*eb)/2.0;
+			_sin_term = (-jkzi*ea - jkzi*eb)/2.0/J;
+		}
 	}
 
 	exp_terms_computed = true;

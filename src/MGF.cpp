@@ -99,6 +99,65 @@ namespace
 			G[3] += rho*g;
 	}
 
+	// Permittivity and permeability of the source layer (including the half-spaces).
+	void SourceLayerMaterial(LayerManager &lm, int i, std::complex<double> &eps, std::complex<double> &mu)
+	{
+		if (i == -1)
+		{
+			eps = lm.eps_top;
+			mu = lm.mu_top;
+		}
+		else if (i == (int)lm.layers.size())
+		{
+			eps = lm.eps_bot;
+			mu = lm.mu_bot;
+		}
+		else
+		{
+			eps = lm.eps[i];
+			mu = lm.mu[i];
+		}
+	}
+
+	// Dyadic (row-major) and its source-point gradient dG[9*c + j] from the scalar kernels of the vector-potential
+	// components: 0 (xx = yy) and 3 (zz) of T0 type, F = T0[K]; 1 (xz, yz) and 2 (zx, zy) of S1 type, cos(phi) S or
+	// sin(phi) S with S = T1[krho K]. v: values; vz: d/dzp; D1 = T1[krho K] for T0 type (dF/dx' = D1 cos, dF/dy' = D1 sin,
+	// since d/dx' = -d/dx and dF/drho = -D1); A = T0[krho^2 K], B = T2[krho^2 K] for S1 type (S' = (A - B)/2,
+	// S/rho = (A + B)/2): d(cos S)/dx' = -(A - B cos2)/2, d(cos S)/dy' = d(sin S)/dx' = B sin cos, d(sin S)/dy' = -(A + B cos2)/2.
+	void AssembleDyadicGradient(const std::array<std::complex<double>, 4> &v, const std::array<std::complex<double>, 4> &vz,
+	                            const std::array<std::complex<double>, 4> &D1, const std::array<std::complex<double>, 4> &A,
+	                            const std::array<std::complex<double>, 4> &B, double c, double s, double c2,
+	                            std::array<std::complex<double>, 9> &G, std::array<std::complex<double>, 27> &dG)
+	{
+		G = {v[0], 0.0, v[1]*c, 0.0, v[0], v[1]*s, v[2]*c, v[2]*s, v[3]};
+		std::fill(dG.begin(), dG.end(), 0.0);
+		auto t0 = [&](int j, int comp)
+			{
+				dG[j] = D1[comp]*c;
+				dG[9 + j] = D1[comp]*s;
+				dG[18 + j] = vz[comp];
+			};
+		auto s1c = [&](int j, int comp)
+			{
+				dG[j] = -(A[comp] - B[comp]*c2)/2.0;
+				dG[9 + j] = B[comp]*s*c;
+				dG[18 + j] = vz[comp]*c;
+			};
+		auto s1s = [&](int j, int comp)
+			{
+				dG[j] = B[comp]*s*c;
+				dG[9 + j] = -(A[comp] + B[comp]*c2)/2.0;
+				dG[18 + j] = vz[comp]*s;
+			};
+		t0(0, 0);
+		t0(4, 0);
+		t0(8, 3);
+		s1c(2, 1);
+		s1s(5, 1);
+		s1c(6, 2);
+		s1s(7, 2);
+	}
+
 	// Keep only the components that are also enabled now (rows computed now contain only those).
 	void NarrowMask(std::vector<bool> &tabulated, const std::vector<bool> &current)
 	{
@@ -1048,6 +1107,155 @@ std::complex<double> MGF::GetSingularityFactor(int component)
 		return F[component];
 	else
 		return F_phi;
+}
+
+
+/*! \brief Compute the MGF and its gradient with respect to the source point (x_diff = x_obs - x_src, y_diff = y_obs - y_src;
+dG[9*c + j] = dG[j]/dx'_c, dG_phi[c] = dG_phi/dx'_c, c = 0, 1, 2 for x', y', z'). The part without the direct term of the
+source layer is integrated spectrally; the direct term exp(-j ki R)/(4 pi R) times mu_i/mu0 (G_xx, G_yy, G_zz) or
+eps0/eps_i (G_phi) is added in closed form when include_direct is set and the source and observation layers coincide
+(R = 0 is then rejected). n'.grad' G_phi is the kernel of the double layer of the scalar potential. Method MGF_INTEGRATE
+only; the quasistatic and homogeneous extraction settings are not used.*/
+void MGF::ComputeMGF_SourceGradient(double x_diff, double y_diff, double z, double zp, std::array<std::complex<double>, 9> &G, std::complex<double> &G_phi, std::array<std::complex<double>, 27> &dG, std::array<std::complex<double>, 3> &dG_phi, bool include_direct)
+{
+
+	if (!initialized || !layers_set)
+	{
+		throw std::logic_error("[ERROR] MGF::ComputeMGF_SourceGradient(): Must call MGF::Initialize() and MGF::SetLayers() first.");
+	}
+	if (s.method != MGF_INTEGRATE)
+	{
+		throw std::logic_error("[ERROR] MGF::ComputeMGF_SourceGradient(): Only the method MGF_INTEGRATE is supported.");
+	}
+	if (!(omega > 0.0))
+	{
+		throw std::domain_error("[ERROR] MGF::ComputeMGF_SourceGradient(): The spectral kernels need a nonzero frequency.");
+	}
+
+	double rho = std::sqrt(x_diff*x_diff + y_diff*y_diff);
+	double phi = std::atan2(y_diff, x_diff);
+	double c = std::cos(phi), sn = std::sin(phi), c2 = std::cos(2.0*phi);
+
+	smgf.SetSourcePoint(zp);
+	smgf.SetObservationPoint(z);
+	auto T = [&](int family, int comp, int order, int power)
+		{
+			return IntegrateSpectralFamily(smgf, rho, family, comp, order, power, s.switching_point, s.tol_quadrature);
+		};
+
+	std::array<std::complex<double>, 4> v, vz, D1, A, B;
+	std::fill(D1.begin(), D1.end(), 0.0);
+	std::fill(A.begin(), A.end(), 0.0);
+	std::fill(B.begin(), B.end(), 0.0);
+	for (int comp = 0; comp < 4; comp++)
+	{
+		int order = (comp == 1 || comp == 2) ? 1 : 0;
+		v[comp] = T(SI_REMAINDER, comp, order, order + 1);
+		vz[comp] = T(SI_REMAINDER_DZP, comp, order, order + 1);
+		if (order == 0)
+			D1[comp] = T(SI_REMAINDER, comp, 1, 2);
+		else
+		{
+			A[comp] = T(SI_REMAINDER, comp, 0, 3);
+			B[comp] = T(SI_REMAINDER, comp, 2, 3);
+		}
+	}
+	AssembleDyadicGradient(v, vz, D1, A, B, c, sn, c2, G, dG);
+
+	G_phi = T(SI_REMAINDER, 4, 0, 1);
+	std::complex<double> D1_phi = T(SI_REMAINDER, 4, 1, 2);
+	dG_phi = {D1_phi*c, D1_phi*sn, T(SI_REMAINDER_DZP, 4, 0, 1)};
+
+	if (include_direct && i == m)
+	{
+		double dz = z - zp;
+		double R = std::sqrt(rho*rho + dz*dz);
+		if (!(R > 0.0))
+		{
+			throw std::domain_error("[ERROR] MGF::ComputeMGF_SourceGradient(): The direct term is singular at R = 0; pass include_direct = false and treat it separately.");
+		}
+		std::complex<double> eps_i, mu_i;
+		SourceLayerMaterial(lm, i, eps_i, mu_i);
+		std::complex<double> k_i = SourceLayerK(lm, i);
+		std::complex<double> g = std::exp(-J*k_i*R)/(4.0*M_PI*R);
+		// grad' g = (r - r') (1 + j k R) exp(-j k R)/(4 pi R^3)
+		std::complex<double> gr = (1.0 + J*k_i*R)*std::exp(-J*k_i*R)/(4.0*M_PI*R*R*R);
+		std::array<double, 3> d = {x_diff, y_diff, dz};
+		std::complex<double> fa = mu_i/mu0, fp = eps0/eps_i;
+		for (int j : {0, 4, 8})
+		{
+			G[j] += fa*g;
+			for (int cc = 0; cc < 3; cc++)
+				dG[9*cc + j] += fa*gr*d[cc];
+		}
+		G_phi += fp*g;
+		for (int cc = 0; cc < 3; cc++)
+			dG_phi[cc] += fp*gr*d[cc];
+	}
+
+	return;
+
+}
+
+
+/*! \brief Compute the K-type kernel K^R of the non-direct part G^R of the vector-potential dyadic and its gradient with
+respect to the source point, for a conductor of conductivity sigma_c (complex allowed, e.g. sigma + j omega (eps_c -
+eps_i)) in the source layer: (lap' + kc^2) K^R_ab = G^R_ab for source points in that layer, kc^2 = ki^2 - j omega mu_i
+sigma_c. With E divergence-free and (lap + kc^2) E = 0 in a conductor V, the vector potential of the current sigma_c E
+due to G^R is mu0 sigma_c times oint [k_a.(n' x curl' E) + (n' x E).(curl' k_a) + (n'.E) div' k_a] dS', k_a being row a of
+K^R. Layout as in ComputeMGF_SourceGradient(). Method MGF_INTEGRATE only, nonzero frequency only.*/
+void MGF::ComputeKR(double x_diff, double y_diff, double z, double zp, std::complex<double> sigma_c, std::array<std::complex<double>, 9> &KR, std::array<std::complex<double>, 27> &dKR)
+{
+
+	if (!initialized || !layers_set)
+	{
+		throw std::logic_error("[ERROR] MGF::ComputeKR(): Must call MGF::Initialize() and MGF::SetLayers() first.");
+	}
+	if (s.method != MGF_INTEGRATE)
+	{
+		throw std::logic_error("[ERROR] MGF::ComputeKR(): Only the method MGF_INTEGRATE is supported.");
+	}
+	if (!(omega > 0.0))
+	{
+		throw std::domain_error("[ERROR] MGF::ComputeKR(): K^R is only defined at a nonzero frequency.");
+	}
+
+	std::complex<double> eps_i, mu_i;
+	SourceLayerMaterial(lm, i, eps_i, mu_i);
+	smgf.SetConductorContrast(-J*omega*mu_i*sigma_c);
+
+	double rho = std::sqrt(x_diff*x_diff + y_diff*y_diff);
+	double phi = std::atan2(y_diff, x_diff);
+	double c = std::cos(phi), sn = std::sin(phi), c2 = std::cos(2.0*phi);
+
+	smgf.SetSourcePoint(zp);
+	smgf.SetObservationPoint(z);
+	auto T = [&](int family, int comp, int order, int power)
+		{
+			return IntegrateSpectralFamily(smgf, rho, family, comp, order, power, s.switching_point, s.tol_quadrature);
+		};
+
+	std::array<std::complex<double>, 4> v, vz, D1, A, B;
+	std::fill(D1.begin(), D1.end(), 0.0);
+	std::fill(A.begin(), A.end(), 0.0);
+	std::fill(B.begin(), B.end(), 0.0);
+	for (int comp = 0; comp < 4; comp++)
+	{
+		int order = (comp == 1 || comp == 2) ? 1 : 0;
+		v[comp] = T(SI_KR, comp, order, order + 1);
+		vz[comp] = T(SI_KR_DZP, comp, order, order + 1);
+		if (order == 0)
+			D1[comp] = T(SI_KR, comp, 1, 2);
+		else
+		{
+			A[comp] = T(SI_KR, comp, 0, 3);
+			B[comp] = T(SI_KR, comp, 2, 3);
+		}
+	}
+	AssembleDyadicGradient(v, vz, D1, A, B, c, sn, c2, KR, dKR);
+
+	return;
+
 }
 
 

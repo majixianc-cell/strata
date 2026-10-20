@@ -114,7 +114,15 @@ public:
 	void ComputeCurlSpectralMGF();
 	std::complex<double> GetResultCurl(int component);
 
-	
+	// ------ Source-point derivatives and K-type kernels (for volume-to-surface maps in BIE solvers) ------
+
+	void ComputeSpectralRemainder(bool derivative, std::array<std::complex<double>, 5> &R);
+	void SetConductorContrast(std::complex<double> _dk2);
+	void ComputeSpectralKR();
+	std::complex<double> GetResultKR(int component);
+	std::complex<double> GetResultKRSourceDerivative(int component);
+
+
     // ============ Precomputation ============
 	
     void ComputeHalfspaceImpedance(std::complex<double> krho);
@@ -244,7 +252,19 @@ public:
 	std::complex<double> IVe, VIh;
 	
 	std::array<std::complex<double>, 4> curlK;
-	
+
+	// ------ Source-point derivatives and K-type kernels ------
+
+	// Read by ComputeExpTermsGii(), the only place where zp enters: return d/dzp of the terms instead of the terms, and
+	// omit the direct term exp(-j kz |z - zp|) of the source layer (i == m). Both off outside the routines below.
+	bool zp_derivative = false;
+	bool drop_direct = false;
+
+	// K^R: (lap' + kc^2) K^R = G^R for the non-direct part G^R, with kc^2 = ki^2 + dk2 (conductor in the source layer)
+	std::complex<double> dk2 = 0.0;
+	bool conductor_set = false;
+	std::array<std::complex<double>, 4> KR, dKR;
+
 
 };
 

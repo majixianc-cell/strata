@@ -27,6 +27,11 @@
 //                                       kinds 3, 4, 5: the same for the quasistatic spectral terms (fresh
 //                                       QuasistaticMGF), to be compared with qspat
 //     [findlayer, z]                    LayerManager::FindLayer on the processed stack-up
+//     [specd, kre, kim, z, zp, i, m]    fresh SpectralMGF: kernels without the direct term R[0..4] and dR/dzp; with
+//                                       sigma_c in the job also K^R[0..3] and dK^R/dzp (ComputeSpectralKR)
+//     [grad, x, y, z, zp, i, m, direct] MGF::ComputeMGF_SourceGradient (direct: include the direct term, default 1)
+//     [kr, x, y, z, zp, i, m]           MGF::ComputeKR with sigma_c from the job
+//   sigma_c:  conductivity of the conductor in the source layer (specd, kr)
 //
 // Every output line carries "q" (query index) and either the values or "err".
 
@@ -534,6 +539,66 @@ int main(int argc, char **argv)
 				RefIntegral r = ref_integrate(K, rho, order);
 				o << ",\"i\":" << i << ",\"m\":" << m << ",\"value\":" << cnum(r.value) << ",\"err_est\":" << num(r.err)
 				  << ",\"partitions\":" << r.partitions << ",\"converged\":" << (r.converged ? 1 : 0);
+			}
+			else if (kind == "specd")
+			{
+				// Spectral kernels without the direct term and their zp-derivatives; with sigma_c in the job also the
+				// K-type kernels K^R[0..3] and their zp-derivatives.
+				C kr(q[1].as<double>(), q[2].as<double>());
+				double z = q[3].as<double>(), zp = q[4].as<double>();
+				int i = layer(q[5].as<int>(), zp), m = layer(q[6].as<int>(), z);
+				SpectralMGF sm;
+				sm.Initialize(&L, f, s.components, false, false);
+				sm.SetLayers(i, m);
+				sm.SetSourcePoint(zp);
+				sm.SetObservationPoint(z);
+				sm.SetRadialWaveNumber(kr);
+				std::array<C, 5> R, Rp;
+				sm.ComputeSpectralRemainder(false, R);
+				sm.ComputeSpectralRemainder(true, Rp);
+				o << ",\"i\":" << i << ",\"m\":" << m << ",\"R\":" << carr(R) << ",\"Rp\":" << carr(Rp)
+				  << ",\"kzi\":" << cnum(sm.kzi);
+				if (job["sigma_c"])
+				{
+					const int N = (int)L.layers.size();
+					C mu_i = (i == -1) ? L.mu_top : ((i == N) ? L.mu_bot : L.mu[i]);
+					C dk2 = -strata::J*(2.0*M_PI*f)*mu_i*job["sigma_c"].as<double>();
+					sm.SetConductorContrast(dk2);
+					sm.ComputeSpectralKR();
+					std::array<C, 4> KR, dKR;
+					for (int c = 0; c < 4; ++c)
+					{
+						KR[c] = sm.GetResultKR(c);
+						dKR[c] = sm.GetResultKRSourceDerivative(c);
+					}
+					o << ",\"KR\":" << carr(KR) << ",\"dKR\":" << carr(dKR) << ",\"kc2\":" << cnum(sm.ki*sm.ki + dk2);
+				}
+			}
+			else if (kind == "grad")
+			{
+				double x = q[1].as<double>(), y = q[2].as<double>(), z = q[3].as<double>(), zp = q[4].as<double>();
+				int i = layer(q[5].as<int>(), zp), m = layer(q[6].as<int>(), z);
+				bool direct = (q.size() > 7) ? q[7].as<int>() : 1;
+				mgf.SetLayers(i, m);
+				std::array<C, 9> G;
+				std::array<C, 27> dG;
+				std::array<C, 3> dphi;
+				C phi;
+				mgf.ComputeMGF_SourceGradient(x, y, z, zp, G, phi, dG, dphi, direct);
+				o << ",\"i\":" << i << ",\"m\":" << m << ",\"G\":" << carr(G) << ",\"phi\":" << cnum(phi)
+				  << ",\"dG\":" << carr(dG) << ",\"dphi\":" << carr(dphi);
+			}
+			else if (kind == "kr")
+			{
+				double x = q[1].as<double>(), y = q[2].as<double>(), z = q[3].as<double>(), zp = q[4].as<double>();
+				int i = layer(q[5].as<int>(), zp), m = layer(q[6].as<int>(), z);
+				if (!job["sigma_c"])
+					throw std::invalid_argument("kr needs sigma_c in the job");
+				mgf.SetLayers(i, m);
+				std::array<C, 9> KR;
+				std::array<C, 27> dKR;
+				mgf.ComputeKR(x, y, z, zp, C(job["sigma_c"].as<double>(), 0.0), KR, dKR);
+				o << ",\"i\":" << i << ",\"m\":" << m << ",\"KR\":" << carr(KR) << ",\"dKR\":" << carr(dKR);
 			}
 			else if (kind == "findlayer")
 			{
