@@ -136,6 +136,7 @@ void read_settings(const YAML::Node &n, MGF_settings &s)
 		else if (k == "export_table") s.export_table = v.as<int>();
 		else if (k == "tol_qse") s.tol_qse = v.as<double>();
 		else if (k == "switching_point") s.switching_point = v.as<double>();
+		else if (k == "tol_quadrature") s.tol_quadrature = v.as<double>();
 		else if (k == "tol_svd") s.tol_svd = v.as<double>();
 		else if (k == "tol_eig") s.tol_eig = v.as<double>();
 		else if (k == "max_num_images") s.max_num_images = v.as<int>();

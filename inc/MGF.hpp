@@ -104,6 +104,7 @@ struct MGF_settings
 
 	double tol_qse = 1.0e-4;	// unused since the quasistatic-only shortcut was restricted to zero frequency
 	double switching_point = -1.0;
+	double tol_quadrature = 1.0e-6;	// relative tolerance of the Sommerfeld quadrature and tail extrapolation
 	
 	// ------ DCIM ------
 

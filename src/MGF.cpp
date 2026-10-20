@@ -1029,32 +1029,32 @@ void MGF::ComputeMGF_Integration(double rho, double z, double zp, std::array<std
 
 	if (s.components[0])
 	{
-		G[0] = IntegrateSpectralFarField(smgf, rho, 0, 0, s.switching_point);
-		G[0] += IntegrateSpectralNearField(smgf, rho, 0, 0, s.switching_point);
+		G[0] = IntegrateSpectralFarField(smgf, rho, 0, 0, s.switching_point, false, s.tol_quadrature);
+		G[0] += IntegrateSpectralNearField(smgf, rho, 0, 0, s.switching_point, false, s.tol_quadrature);
 	}
 	
 	if (s.components[1])
 	{
-		G[1] = IntegrateSpectralFarField(smgf, rho, 1, 1, s.switching_point);
-		G[1] += IntegrateSpectralNearField(smgf, rho, 1, 1, s.switching_point);
+		G[1] = IntegrateSpectralFarField(smgf, rho, 1, 1, s.switching_point, false, s.tol_quadrature);
+		G[1] += IntegrateSpectralNearField(smgf, rho, 1, 1, s.switching_point, false, s.tol_quadrature);
 	}
 
 	if (s.components[2])
 	{
-		G[2] = IntegrateSpectralFarField(smgf, rho, 2, 1, s.switching_point);
-		G[2] += IntegrateSpectralNearField(smgf, rho, 2, 1, s.switching_point);
+		G[2] = IntegrateSpectralFarField(smgf, rho, 2, 1, s.switching_point, false, s.tol_quadrature);
+		G[2] += IntegrateSpectralNearField(smgf, rho, 2, 1, s.switching_point, false, s.tol_quadrature);
 	}
 
 	if (s.components[3])
 	{
-		G[3] = IntegrateSpectralFarField(smgf, rho, 3, 0, s.switching_point);
-		G[3] += IntegrateSpectralNearField(smgf, rho, 3, 0, s.switching_point);
+		G[3] = IntegrateSpectralFarField(smgf, rho, 3, 0, s.switching_point, false, s.tol_quadrature);
+		G[3] += IntegrateSpectralNearField(smgf, rho, 3, 0, s.switching_point, false, s.tol_quadrature);
 	}
 
 	if (s.components[4])
 	{
-		G[4] = IntegrateSpectralFarField(smgf, rho, 4, 0, s.switching_point);
-		G[4] += IntegrateSpectralNearField(smgf, rho, 4, 0, s.switching_point);
+		G[4] = IntegrateSpectralFarField(smgf, rho, 4, 0, s.switching_point, false, s.tol_quadrature);
+		G[4] += IntegrateSpectralNearField(smgf, rho, 4, 0, s.switching_point, false, s.tol_quadrature);
 	}
 
 	return;
@@ -1082,26 +1082,26 @@ void MGF::ComputeCurlMGF_Integration(double rho, double z, double zp, std::array
 
 	if (s.components_curl[0])
 	{
-		G[0] = IntegrateSpectralFarField(smgf, rho, 0, 2, s.switching_point, true);
-		G[0] += IntegrateSpectralNearField(smgf, rho, 0, 2, s.switching_point, true);
+		G[0] = IntegrateSpectralFarField(smgf, rho, 0, 2, s.switching_point, true, s.tol_quadrature);
+		G[0] += IntegrateSpectralNearField(smgf, rho, 0, 2, s.switching_point, true, s.tol_quadrature);
 	}
 	
 	if (s.components_curl[1])
 	{
-		G[1] = IntegrateSpectralFarField(smgf, rho, 1, 0, s.switching_point, true);
-		G[1] += IntegrateSpectralNearField(smgf, rho, 1, 0, s.switching_point, true);
+		G[1] = IntegrateSpectralFarField(smgf, rho, 1, 0, s.switching_point, true, s.tol_quadrature);
+		G[1] += IntegrateSpectralNearField(smgf, rho, 1, 0, s.switching_point, true, s.tol_quadrature);
 	}
 
 	if (s.components_curl[2])
 	{
-		G[2] = IntegrateSpectralFarField(smgf, rho, 2, 1, s.switching_point, true);
-		G[2] += IntegrateSpectralNearField(smgf, rho, 2, 1, s.switching_point, true);
+		G[2] = IntegrateSpectralFarField(smgf, rho, 2, 1, s.switching_point, true, s.tol_quadrature);
+		G[2] += IntegrateSpectralNearField(smgf, rho, 2, 1, s.switching_point, true, s.tol_quadrature);
 	}
 
 	if (s.components_curl[3])
 	{
-		G[3] = IntegrateSpectralFarField(smgf, rho, 3, 1, s.switching_point, true);
-		G[3] += IntegrateSpectralNearField(smgf, rho, 3, 1, s.switching_point, true);
+		G[3] = IntegrateSpectralFarField(smgf, rho, 3, 1, s.switching_point, true, s.tol_quadrature);
+		G[3] += IntegrateSpectralNearField(smgf, rho, 3, 1, s.switching_point, true, s.tol_quadrature);
 	}
 
 	return;
@@ -2140,7 +2140,8 @@ std::vector<double> MGF::TableSignature(int entries_per_sample)
 	sig.insert(sig.end(), {lm.eps_top.real(), lm.eps_top.imag(), lm.mu_top.real(), lm.mu_top.imag(), (double)lm.isPEC_top,
 	                       lm.eps_bot.real(), lm.eps_bot.imag(), lm.mu_bot.real(), lm.mu_bot.imag(), (double)lm.isPEC_bot,
 	                       (double)s.extract_quasistatic, (double)s.extract_homogeneous, (double)s.extract_singularities,
-	                       (double)s.sampling_method, (double)s.curl_type, (double)s.DCIM_method});
+	                       (double)s.sampling_method, (double)s.curl_type, (double)s.DCIM_method, s.tol_quadrature,
+	                       s.tol_svd, s.tol_eig, (double)s.max_num_images, s.switching_point});
 	for (bool c : s.components) sig.push_back(c);
 	for (bool c : s.components_curl) sig.push_back(c);
 	return sig;

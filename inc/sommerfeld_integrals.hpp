@@ -65,8 +65,8 @@
 // ====== Computational drivers ======
 
 std::complex<double> SommerfeldIntegrand(SpectralMGF &smgf, double rho, std::complex<double> krho, int component, int order, bool curl = false);
-std::complex<double> IntegrateSpectralFarField(SpectralMGF &smgf, double rho, int component, int order, double a, bool curl = false);
-std::complex<double> IntegrateSpectralNearField(SpectralMGF &smgf, double rho, int component, int order, double a, bool curl = false);
+std::complex<double> IntegrateSpectralFarField(SpectralMGF &smgf, double rho, int component, int order, double a, bool curl = false, double tol = 1.0e-6);
+std::complex<double> IntegrateSpectralNearField(SpectralMGF &smgf, double rho, int component, int order, double a, bool curl = false, double tol = 1.0e-6);
 
 
 // ====== Partition-extrapolation integration routines ======
@@ -165,10 +165,9 @@ inline std::complex<double> SommerfeldIntegrand(SpectralMGF &smgf, double rho, s
 
 
 /*! \brief Function to integrate the spectral MGF for values of krho beyond the spectral near-field, using partition-extrapolation routines.*/
-inline std::complex<double> IntegrateSpectralFarField(SpectralMGF &smgf, double rho, int component, int order, double a, bool curl)
+inline std::complex<double> IntegrateSpectralFarField(SpectralMGF &smgf, double rho, int component, int order, double a, bool curl, double tol)
 {
 
-	double tol = 1.0e-6;
 	
 	// According to Michalski, Mosig, 2016, the partition-extrapolation procedure should begin at the first zero of the Bessel function that occurs after a - call this point b. A separate finite-domain integration has to be performed to "bridge the gap" between a and b. Pre-tabulated values of Bessel zeros from Abramowitz & Stegun 1972 are used to pick b, available through the Boost library.
 
@@ -250,7 +249,7 @@ inline std::complex<double> IntegrateSpectralFarField(SpectralMGF &smgf, double 
 
 
 /*! \brief Function to integrate the spectral MGF for values of krho in the spectral near-field, using a rectangular path deformation to avoid singularities.*/
-inline std::complex<double> IntegrateSpectralNearField(SpectralMGF &smgf, double rho, int component, int order, double a, bool curl)
+inline std::complex<double> IntegrateSpectralNearField(SpectralMGF &smgf, double rho, int component, int order, double a, bool curl, double tol)
 {
 
 	// if (std::abs(smgf.lm->k_max) < 1.0e-15)
@@ -281,7 +280,6 @@ inline std::complex<double> IntegrateSpectralNearField(SpectralMGF &smgf, double
 			return SommerfeldIntegrand(smgf, rho, krho, component, order, curl);
 		};
 
-	double tol = 1.0e-6;
 	double zero_offset = 0.0e-3;
 	
 	// First path

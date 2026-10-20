@@ -39,6 +39,13 @@ verbose : {true, false}
 
 .. \begin{itemize}
 
+tol_quadrature : double > 0
+    Relative tolerance of the Sommerfeld quadrature (contour, bridge and tail partitions) and of the tail extrapolation used by ``MGF_INTEGRATE`` and by the tabulation of ``MGF_INTERPOLATE``. Tails that do not reach it within the partition budget are counted by ``SommerfeldTailNonConvergedCount()``.
+    Default: 1e-6.
+
+tol_qse : double
+    No longer used. It was the threshold of a shortcut that replaced the integral by the quasistatic terms alone whenever Re(k r) < tol_qse; the quasistatic terms only contain the first images, so the shortcut is now restricted to zero frequency.
+
 .. \item \lstinline{switching_point}: \lstinline{double} greater than 0. Only relevant for the \lstinline{method} \lstinline{MGF_INTEGRATE}. Set the extent along the positive real axis to which the Sommerfeld integration path is to be deformed, to avoid poles. This corresponds to the variable $a$ defined in~\cite{SI_PE}. Set to a negative number to use the default setting. Default: \lstinline{-1.0}.
 
 .. \item \lstinline{tol_svd}: \lstinline{double} greater than 0. Only relevant for the \lstinline{method} \lstinline{MGF_DCIM}. Set the relative tolerance below which singular values are to be ignored in the application of the GPOF method~\cite{gpof} in the DCIM.\@ Default: \lstinline{1.0e-4}.
