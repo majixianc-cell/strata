@@ -484,16 +484,7 @@ inline double BesselJ_NextZero(double v, double x)
 	else if ((int)v == 1)
 		return BesselJ1_NextZero(x);
 
-	double result = -1.0;
-	int ii = 1;
-	
-	while (result <= x)
-	{
-		result = boost::math::cyl_bessel_j_zero((double)v, ii);
-		ii++;
-	}
-
-	return result;
+	return BesselJ_NextZero_Boost(v, x);
 
 }
 
