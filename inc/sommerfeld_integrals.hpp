@@ -174,10 +174,21 @@ inline std::complex<double> IntegrateSpectralFarField(SpectralMGF &smgf, double 
 		return result;
 	};
 	
+	// Bridge the gap [a, b]. For rho << 1/a, b = j_{nu,1}/rho lies many orders of magnitude beyond a, while the
+	// integrand varies (and, for z != zp, decays) on the scale of a. A single adaptive rule on [a, b] then only samples
+	// the far part of the interval and can return zero. Panels whose widths start at a and double resolve every
+	// scale between a and b; for ordinary rho this is one or two panels.
 	std::complex<double> bridge = 0.0;
-	if (b > a)
-		// TanhSinh(f, a, b, tol, bridge);
-		GaussKronrodBoost(f, a, b, tol, bridge);
+	double left = a, width = std::max(a, std::ldexp(b, -60));
+	while (left < b)
+	{
+		double right = std::min(b, left + width);
+		std::complex<double> part = 0.0;
+		GaussKronrodBoost(f, left, right, tol, part);
+		bridge += part;
+		left = right;
+		width *= 2.0;
+	}
 
 	std::complex<double> result = 0.0;
 	PartExtrap(f, b, q, tol, result);
