@@ -191,6 +191,9 @@ public:
 	
 	bool initialized = false;
 	bool layers_set = false;
+	// Components for which DCIM images or interpolation-table entries exist (set by Initialize(); rows added by the
+	// adaptive refinement only contain the components enabled at that time)
+	std::vector<bool> components_tabulated, components_curl_tabulated;
 	bool singularity_factors_computed = false;
 		
 private:

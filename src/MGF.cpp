@@ -98,6 +98,29 @@ namespace
 		if (components_curl[3])
 			G[3] += rho*g;
 	}
+
+	// Keep only the components that are also enabled now (rows computed now contain only those).
+	void NarrowMask(std::vector<bool> &tabulated, const std::vector<bool> &current)
+	{
+		for (std::size_t ii = 0; ii < tabulated.size(); ii++)
+			tabulated[ii] = tabulated[ii] && ii < current.size() && current[ii];
+	}
+
+	// Enabling a component after Initialize() is only possible when its images or table entries exist.
+	void CheckComponentMask(const std::vector<bool> &components, const std::vector<bool> &tabulated, std::size_t size,
+	                        bool precomputed, const std::string &caller)
+	{
+		if (components.size() != size)
+			throw std::invalid_argument("[ERROR] MGF::" + caller + "(): expected " + std::to_string(size) + " flags, got " +
+			                            std::to_string(components.size()) + ".");
+		if (!precomputed)
+			return;
+		for (std::size_t ii = 0; ii < size; ii++)
+			if (components[ii] && !(ii < tabulated.size() && tabulated[ii]))
+				throw std::logic_error("[ERROR] MGF::" + caller + "(): component " + std::to_string(ii) + " has no DCIM images "
+				                       "or interpolation-table entries, because it was disabled when they were generated. "
+				                       "Enable it in the settings passed to Initialize().");
+	}
 }
 
 
@@ -274,6 +297,9 @@ void MGF::Initialize(double _f, LayerManager &_lm, MGF_settings &_s)
 
 	// ====== Update switchboard ======
 	
+	components_tabulated = s.components;
+	components_curl_tabulated = s.components_curl;
+
 	initialized = true;
 	layers_set = false;
 	singularity_factors_computed = false;
@@ -505,6 +531,9 @@ void MGF::AddRhoTable(double rho_test)
     AppendMGFTableRho(MGF_table, index, rho_size + 1);
     if (s.compute_curl)
         AppendMGFTableRho(CurlMGF_table, index, rho_size + 1, true);
+    NarrowMask(components_tabulated, s.components);
+    if (s.compute_curl)
+        NarrowMask(components_curl_tabulated, s.components_curl);
 
     std::cout << "-->Add this point to the interpolation table!" << std::endl;
 }
@@ -525,6 +554,9 @@ void MGF::AddZTable(double z_test, int layer)
     AppendMGFTableZ(MGF_table, layer, index, z_size + 1);
     if (s.compute_curl)
         AppendMGFTableZ(CurlMGF_table, layer, index, z_size + 1, true, false);
+    NarrowMask(components_tabulated, s.components);
+    if (s.compute_curl)
+        NarrowMask(components_curl_tabulated, s.components_curl);
 
     std::cout << "-->Add this point to the interpolation table!" << std::endl;
 }
@@ -655,6 +687,11 @@ void MGF::SetSingularityExtraction(bool extract_singularities)
 void MGF::SetComponents(std::vector<bool> components)
 {
 	
+	// DCIM images and interpolation tables only exist for the components enabled when they were generated; enabling
+	// another component afterwards used to return zero for it (or only its quasistatic part).
+	CheckComponentMask(components, components_tabulated, 5,
+	                   initialized && (s.method == MGF_DCIM || s.method == MGF_INTERPOLATE), "SetComponents");
+
 	s.components = components;
 	if (s.extract_quasistatic || s.method == MGF_QUASISTATIC)
 		qmgf.components = components;
@@ -677,6 +714,10 @@ void MGF::SetComponents(std::vector<bool> components)
 void MGF::SetCurlComponents(std::vector<bool> components_curl)
 {
 	
+	CheckComponentMask(components_curl, components_curl_tabulated, 4,
+	                   initialized && s.compute_curl && (s.method == MGF_DCIM || s.method == MGF_INTERPOLATE),
+	                   "SetCurlComponents");
+
 	s.components_curl = components_curl;
 	if (s.extract_quasistatic || s.method == MGF_QUASISTATIC)
 		qmgf.components_curl = components_curl;

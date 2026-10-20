@@ -1017,6 +1017,48 @@ Reg in_curl_missing("IN-curl-not-generated", "ComputeCurlMGF with interpolation 
 	t.check(thrown, "logic_error instead of reading an empty table");
 }, 120);
 
+Reg in_mask("IN-components-not-precomputed", "SetComponents() cannot enable a component without DCIM images or table entries", [](T &t) {
+	const double f = 10e9;
+	auto throws = [](MGF &mgf, std::vector<bool> c, bool curl) -> int {
+		try { curl ? mgf.SetCurlComponents(c) : mgf.SetComponents(c); }
+		catch (const std::invalid_argument &) { return 2; }
+		catch (const std::logic_error &) { return 1; }
+		return 0;
+	};
+	// DCIM: images for components 1 and 3 do not exist (they used to evaluate to zero after being re-enabled)
+	{
+		LayerManager lm = two_layer(f);
+		std::vector<double> zn = {0.5e-3};
+		lm.InsertNodes_z(zn);
+		MGF mgf;
+		MGF_settings s = quiet(MGF_DCIM);
+		s.components = {1, 0, 1, 0, 1};
+		mgf.Initialize(f, lm, s);
+		t.check(throws(mgf, {1, 1, 1, 1, 1}, false) == 1, "DCIM: enabling a component without images throws");
+		t.check(throws(mgf, {1, 0, 0, 0, 1}, false) == 0 && throws(mgf, {1, 0, 1, 0, 1}, false) == 0,
+		        "DCIM: disabling and re-enabling a component with images is allowed");
+		t.check(throws(mgf, {1, 1}, false) == 2, "DCIM: a mask of the wrong length is rejected");
+	}
+	// Interpolation: rows appended while a component is disabled lack it
+	{
+		LayerManager lm = two_layer(f);
+		MGF mgf = interp_engine(lm, f, {0.5e-3}, {1e-3, 2e-3, 3e-3, 4e-3});
+		t.check(throws(mgf, {1, 0, 1, 1, 1}, false) == 0, "interpolation: disabling a component is allowed");
+		mgf.AddRhoTable(2.5e-3);
+		t.check(throws(mgf, {1, 1, 1, 1, 1}, false) == 1, "interpolation: after adaptive refinement without component 1 it cannot be re-enabled");
+	}
+	// Direct integration computes everything on demand
+	{
+		LayerManager lm = two_layer(f);
+		MGF mgf;
+		MGF_settings s = quiet(MGF_INTEGRATE);
+		s.components = {1, 0, 0, 0, 0};
+		s.components_curl = {0, 0, 0, 0};
+		mgf.Initialize(f, lm, s);
+		t.check(throws(mgf, {1, 1, 1, 1, 1}, false) == 0 && throws(mgf, {1, 1, 1, 1}, true) == 0, "integration: any mask");
+	}
+}, 300);
+
 Reg qs_hs("QS-halfspace-finite", "quasistatic terms with the source in a half-space are finite", [](T &t) {
 	LayerManager lm = two_layer();
 	QuasistaticMGF q;
