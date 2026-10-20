@@ -251,12 +251,13 @@ inline std::complex<double> IntegrateSpectralNearField(SpectralMGF &smgf, double
 	GaussKronrodBoost(f_real, zero_offset, a, tol, second_path);
 	// TanhSinhBoost(f_real, zero_offset, a, tol, second_path);
 	
-	// First path
+	// Third path
 	std::complex<double> third_path = 0.0;
 	krho_real = a;
 	GaussKronrodBoost(f_imag, h, 0.0, tol, third_path);
-	
-	return (first_path + second_path + third_path);
+
+	// The vertical paths are parametrized by the imaginary part t of krho, so dkrho = j dt there.
+	return (J*first_path + second_path + J*third_path);
 
 }
 
