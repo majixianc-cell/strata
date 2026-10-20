@@ -472,6 +472,15 @@ Fresnel QuasistaticMGF::GetFresnelCoefficient_Upward(int idx)
 		return Rf;
 	}
 
+	// Looking up from the bottom half-space (source or observer below the stack); Rrs only covers the layers.
+	if (idx == (int)lm->layers.size() - 1)
+	{
+		Fresnel Rf;
+		Rf.Fh = -(lm->mu_bot - lm->mu.back())/(lm->mu_bot + lm->mu.back());
+		Rf.Fe = (lm->eps_bot - lm->eps.back())/(lm->eps_bot + lm->eps.back());
+		return Rf;
+	}
+
 	return Rrs[idx+1];
 }
 
@@ -484,6 +493,15 @@ Fresnel QuasistaticMGF::GetFresnelCoefficient_Downward(int idx)
 		Fresnel Rf;
 		Rf.Fh = 0.0;
 		Rf.Fe = 0.0;
+		return Rf;
+	}
+
+	// Looking down from the top half-space (source or observer above the stack); Rls only covers the layers.
+	if (idx == -1)
+	{
+		Fresnel Rf;
+		Rf.Fh = -(lm->mu_top - lm->mu[0])/(lm->mu_top + lm->mu[0]);
+		Rf.Fe = (lm->eps_top - lm->eps[0])/(lm->eps_top + lm->eps[0]);
 		return Rf;
 	}
 	
