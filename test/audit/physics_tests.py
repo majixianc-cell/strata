@@ -38,11 +38,11 @@ FIND = -999
 # Probe driver
 # ------------------------------------------------------------------------------------------------
 
-def run_probe(probe, job, timeout=3600):
+def run_probe(probe, job, timeout=3600, threads=1):
     with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as fh:
         json.dump(job, fh)
         path = fh.name
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
+    env = dict(os.environ, OMP_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS='1')
     t0 = time.time()
     try:
         r = subprocess.run([probe, path], capture_output=True, text=True, timeout=timeout, env=env)
@@ -278,6 +278,104 @@ def compare_spatial(res, ref, curl_type, phi=0.3):
 
 
 # ------------------------------------------------------------------------------------------------
+# Methods group: DCIM and interpolation against the reference; thread independence of table building
+# ------------------------------------------------------------------------------------------------
+
+METHOD_STACKS = [('two_layer', 1e9), ('two_layer', 10e9), ('ling_jin_2000', 30e9), ('onchip_si', 1e9), ('magnetic_lossy', 3e9)]
+
+
+def method_points(name, f):
+    st = ref_stack(name, f)
+    lo, hi = st.zmin[0], st.zmax[0]
+    h = hi - lo
+    lam = 2*np.pi/abs(st.k(0))
+    pts = []
+    for frac_rho in (0.05, 0.2, 0.7):
+        rho = frac_rho*min(lam, 20*h)
+        pts.append((rho, lo + 0.7*h, lo + 0.3*h, 0, 0, 'same-layer'))
+        pts.append((rho, lo + 0.5*h, lo + 0.5*h, 0, 0, 'same-height'))
+        if st.N > 1:
+            pts.append((rho, st.zmin[1] + 0.5*(st.zmax[1] - st.zmin[1]), lo + 0.5*h, 0, 1, 'cross-layer'))
+    return pts
+
+
+def methods_group(probe, workers, out):
+    rows = []
+    jobs = []
+    for name, f in METHOD_STACKS:
+        pts = method_points(name, f)
+        layers, top, bot, _ = STACKS[name]
+        zn = sorted(set([p[1] for p in pts] + [p[2] for p in pts]))
+        rhos = [p[0] for p in pts]
+        rho_nodes = list(np.linspace(0.5*min(rhos), 1.5*max(rhos), 60))
+        q = [['mgf', float(r)*np.cos(0.3), float(r)*np.sin(0.3), float(z), float(zp), int(si), int(oi)] for (r, z, zp, si, oi, k) in pts]
+        qn = [['mgf', float(rho_nodes[7]), 0.0, float(z), float(zp), int(si), int(oi)] for (r, z, zp, si, oi, k) in pts]
+        base = {'stack': stack_job(layers, top, bot), 'freq': f, 'znodes': zn}
+        for lvl in (1, 2, 3):
+            jobs.append((name, f, 'dcim%d' % lvl, pts, dict(base, settings={'method': 'DCIM', 'DCIM_method': lvl}, queries=q), 1))
+        for qs in (0, 1):
+            st = {'method': 'INTERPOLATE', 'order': 3, 'extract_quasistatic': qs}
+            jobs.append((name, f, 'interp' + ('_qs' if qs else ''), pts, dict(base, rhonodes=rho_nodes, settings=st, queries=q + qn), 1))
+            jobs.append((name, f, 'interp' + ('_qs' if qs else '') + '_threads8', pts, dict(base, rhonodes=rho_nodes, settings=st, queries=q + qn), 8))
+        jobs.append((name, f, 'integrate_at_nodes', pts, dict(base, settings={'method': 'INTEGRATE'}, queries=qn), 1))
+    with cf.ThreadPoolExecutor(max(1, workers//2)) as ex:
+        results = list(ex.map(lambda j: (j, run_probe(probe, j[4], threads=j[5])), jobs))
+    refs = {}
+    allpts = {(name, f, i): pt for (name, f, v, pts, job, th) in jobs for i, pt in enumerate(pts)}
+    with cf.ProcessPoolExecutor(workers) as ex:
+        futs = {ex.submit(reference_spatial, key[0], key[1], pt): key for key, pt in allpts.items()}
+        for fu in cf.as_completed(futs):
+            try:
+                refs[futs[fu]] = fu.result()
+            except Exception as e:  # noqa: BLE001
+                refs[futs[fu]] = e
+    by_key = {}
+    for (name, f, v, pts, job, th), res in results:
+        by_key[(name, f, v)] = res
+        for i, (pt, r) in enumerate(zip(pts, res['results'])):
+            row = dict(stack=name, f=f, variant=v, point=[float(x) if not isinstance(x, str) else x for x in pt])
+            ref = refs.get((name, f, i))
+            if 'err' in r:
+                row['strata_err'] = r['err']
+            elif isinstance(ref, Exception) or ref is None:
+                row['ref_err'] = str(ref)
+            elif v != 'integrate_at_nodes':
+                row.update(compare_spatial(r, ref, 'GHJ'))
+            rows.append(row)
+    # consistency: interpolation at a rho node equals direct integration there; threads do not change the table
+    cons = []
+    for name, f in METHOD_STACKS:
+        npts = len(method_points(name, f))
+        direct = by_key[(name, f, 'integrate_at_nodes')]['results']
+        for v in ('interp', 'interp_qs'):
+            at_nodes = by_key[(name, f, v)]['results'][npts:]
+            for a, b in zip(at_nodes, direct):
+                if 'G' in a and 'G' in b:
+                    ga, gb = cvec(a['G']), cvec(b['G'])
+                    cons.append(dict(stack=name, f=f, variant=v, check='node_vs_integrate',
+                                     err=float(np.max(np.abs(ga - gb))/max(np.max(np.abs(gb)), 1e-300))))
+            r1 = by_key[(name, f, v)]['results']
+            r8 = by_key[(name, f, v + '_threads8')]['results']
+            same = all(a.get('G') == b.get('G') and a.get('phi') == b.get('phi') for a, b in zip(r1, r8))
+            cons.append(dict(stack=name, f=f, variant=v, check='threads_1_vs_8_identical', ok=bool(same)))
+    with open(out/'methods.jsonl', 'w') as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + '\n')
+        for c in cons:
+            fh.write(json.dumps(c) + '\n')
+    summ = {}
+    for v in sorted(set(r['variant'] for r in rows)):
+        sel = [r for r in rows if r['variant'] == v]
+        ok = [r for r in sel if 'G_err' in r]
+        errs = [max(max(r['G_err']), r['phi_err']) for r in ok]
+        summ[v] = dict(n=len(sel), n_strata_err=sum('strata_err' in r for r in sel), n_nonfinite=sum(not np.isfinite(e) for e in errs),
+                       median=float(np.median(errs)) if errs else None, max=float(np.nanmax(errs)) if errs else None)
+    summ['node_vs_integrate_max'] = float(max([c['err'] for c in cons if c['check'] == 'node_vs_integrate'], default=np.nan))
+    summ['threads_identical'] = all(c['ok'] for c in cons if c['check'] == 'threads_1_vs_8_identical')
+    return summ
+
+
+# ------------------------------------------------------------------------------------------------
 
 def main():
     ap = argparse.ArgumentParser()
@@ -371,6 +469,10 @@ def main():
                         max_curl=float(max([max(r['curl_err']) for r in ok if 'curl_err' in r], default=np.nan)))
         summary['spatial'] = s
         print(json.dumps(s, indent=1))
+
+    if 'methods' in groups:
+        summary['methods'] = methods_group(a.probe, a.workers, out)
+        print(json.dumps(summary['methods'], indent=1))
 
     (out/'summary.json').write_text(json.dumps(summary, indent=1))
 
