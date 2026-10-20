@@ -38,6 +38,7 @@
 #define SI_H
 
 
+#include <algorithm>
 #include <complex>
 #include <vector>
 #include <cmath>
@@ -381,7 +382,10 @@ void TruncIndex(const F f, double eh, int &n, std::complex<double> &s, double si
 	double kappa = 1.0e-15;
 	double ekh = eh;
 
-	for (n = 0; n <= nmax; n++)
+	// Sum the terms k = 1, 2, ... of the coarsest level until they become negligible. On return, n is the number
+	// of terms used: PartSum() needs it to cover the same abscissa range (odd multiples of the halved step) on the
+	// finer levels.
+	for (n = 1; n <= nmax; n++)
 	{
 		std::complex<double> t = Term(f, ekh, sigma, eta, a, b);
 		s += t;
@@ -392,8 +396,8 @@ void TruncIndex(const F f, double eh, int &n, std::complex<double> &s, double si
 		ekh *= eh;
 	}
 
-	n -= 1;
-	
+	n = std::min(n, nmax);
+
 	return;
 	
 }
