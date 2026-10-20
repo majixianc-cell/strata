@@ -519,6 +519,37 @@ LayerManager thin_nm()
 	return lm;
 }
 
+Reg ex_axis("EX-quasistatic-near-axis", "extract_quasistatic keeps the O(rho) components next to the axis", [](T &t) {
+	// rho = 0.5 pm in a nanometre stack: the spatial quasistatic J_1 terms were dropped below rho = 1e-6 x (stack
+	// height) = 1.03 pm while the spectral part still subtracted them (G_xz, G_zx and the curl off by up to 8.7e-5).
+	auto run = [](bool qs) {
+		LayerManager lm = thin_nm();
+		MGF mgf;
+		MGF_settings s = quiet(MGF_INTEGRATE);
+		s.compute_curl = true;
+		s.curl_type = MGF_GHJ;
+		s.extract_quasistatic = qs;
+		mgf.Initialize(1e9, lm, s);
+		const double rho = 0.5e-12, z = 29e-9, zp = 26e-9;
+		mgf.SetLayers(lm.FindLayer(zp), lm.FindLayer(z));
+		std::array<C, 9> G, H;
+		C p;
+		mgf.ComputeMGF(rho*std::cos(0.3), rho*std::sin(0.3), z, zp, G, p);
+		mgf.ComputeCurlMGF(rho*std::cos(0.3), rho*std::sin(0.3), z, zp, H);
+		std::array<C, 19> out;
+		for (int n = 0; n < 9; ++n) { out[n] = G[n]; out[9 + n] = H[n]; }
+		out[18] = p;
+		return out;
+	};
+	auto a = run(false), b = run(true);
+	double gs = std::max(std::abs(a[0]), std::abs(a[8])), hs = 0.0, eg = 0.0, eh = 0.0;
+	for (int n = 9; n < 18; ++n) hs = std::max(hs, std::abs(a[n]));
+	for (int n = 0; n < 9; ++n) eg = std::max(eg, std::abs(a[n] - b[n])/gs);
+	for (int n = 9; n < 18; ++n) eh = std::max(eh, std::abs(a[n] - b[n])/hs);
+	t.check(eg < 1e-8, "MGF with and without extract_quasistatic: max deviation " + fmt(eg, 3) + " (G_xz " + fmt(a[2]) + " vs " + fmt(b[2]) + ")");
+	t.check(eh < 1e-8, "curl: max deviation " + fmt(eh, 3));
+}, 300);
+
 Reg qd_farrho("QD-large-rho", "rho beyond the tabulated Bessel zeros (a*rho > 1566.87)", [](T &t) {
 	const double f = 30e9;
 	LayerManager lm = homogeneous(1.0, 1.0, 0.0, -0.01, 0.01, f);

@@ -59,17 +59,21 @@ namespace
 	{
 		return std::isinf(r) ? std::complex<double>(0.0) : std::exp(-jk*r)/r;
 	}
+	// (1/rho)(1 - g/r), r = sqrt(rho^2 + g^2), g >= 0, written as rho/(r (r + g)): the former expression cancels for
+	// rho << g (no digit is left below rho/g ~ 1e-8), which is why these terms used to be dropped below
+	// rho = 1e-6 x (stack height) although the spectral part still subtracted them.
 	inline std::complex<double> ImageS1(double rho, double g, double r)
 	{
-		return std::isinf(r) ? std::complex<double>(0.0) : std::complex<double>((1.0/rho)*(1.0 - g/r));
+		return std::isinf(r) ? std::complex<double>(0.0) : std::complex<double>(rho/(r*(r + g)));
 	}
 	inline std::complex<double> ImageCurl(std::complex<double> jk, double g, double r)
 	{
 		return std::isinf(r) ? std::complex<double>(0.0) : g*(1.0 + jk*r)*std::exp(-jk*r)/std::pow(r, 3);
 	}
+	// (r - g)^2 (2r + g)/(rho^2 r^3), with r - g = rho^2/(r + g) for the same reason
 	inline std::complex<double> ImageCurlS2(double rho, double g, double r)
 	{
-		return std::isinf(r) ? std::complex<double>(0.0) : std::complex<double>(std::pow((-g + r), 2)*(2.0*r + g)/std::pow(rho, 2)/std::pow(r, 3));
+		return std::isinf(r) ? std::complex<double>(0.0) : std::complex<double>(rho*rho*(2.0*r + g)/(std::pow(r + g, 2)*std::pow(r, 3)));
 	}
 }
 
@@ -1979,8 +1983,9 @@ void QuasistaticMGF::ComputeExpTermsKii_SpatialS1(double z, double zp, double rh
 
 	std::fill(exp_terms.begin(), exp_terms.end(), 0.0);
 	
-	// If rho ~ 0, J_1(rho*krho) ~ 0, so off-diagonal terms are ~0.
-	if (LaterallyCoincident(rho))
+	// On the axis J_1(rho*krho) = 0, so the off-diagonal terms vanish (only there: they are O(rho) and the spectral
+	// part subtracts them at any rho > 0).
+	if (!(rho > 0.0))
 		return;
 
 	if (!extract_singularities)
@@ -2125,8 +2130,9 @@ void QuasistaticMGF::ComputeExpTermsKmi_SpatialS1(double z, double zp, double rh
 	
 	std::fill(exp_terms.begin(), exp_terms.end(), 0.0);
 	
-	// If rho ~ 0, J_1(rho*krho) ~ 0, so off-diagonal terms are ~0.
-	if (LaterallyCoincident(rho))
+	// On the axis J_1(rho*krho) = 0, so the off-diagonal terms vanish (only there: they are O(rho) and the spectral
+	// part subtracts them at any rho > 0).
+	if (!(rho > 0.0))
 		return;
 
 	if (!extract_singularities || !AxiallyCoincident(z, zp))
@@ -2459,8 +2465,8 @@ void QuasistaticMGF::ComputeTermsCurlKii_SpatialS1(double z, double zp, double r
 
 	std::fill(terms.begin(), terms.end(), 0.0);
 	
-	// If rho ~ 0, J_1(rho*krho) ~ 0, so spatial terms are ~0.
-	if (LaterallyCoincident(rho))
+	// On the axis J_1(rho*krho) = 0, so these terms vanish (only there, see ComputeExpTermsKii_SpatialS1()).
+	if (!(rho > 0.0))
 		return;
 
 	for (int ii = 1; ii < terms.size(); ii++)
@@ -2483,8 +2489,8 @@ void QuasistaticMGF::ComputeTermsCurlKii_SpatialS2(double z, double zp, double r
 
 	std::fill(terms.begin(), terms.end(), 0.0);
 	
-	// If rho ~ 0, J_2(rho*krho) ~ 0, so spatial terms are ~0.
-	if (LaterallyCoincident(rho))
+	// On the axis J_2(rho*krho) = 0, so these terms vanish (only there, see ComputeExpTermsKii_SpatialS1()).
+	if (!(rho > 0.0))
 		return;
 
 	for (int ii = 1; ii < terms.size(); ii++)
@@ -2539,8 +2545,8 @@ void QuasistaticMGF::ComputeTermsCurlKmi_SpatialS1(double z, double zp, double r
 	
 	std::fill(terms.begin(), terms.end(), 0.0);
 	
-	// If rho ~ 0, J_1(rho*krho) ~ 0, so spatial terms are ~0.
-	if (LaterallyCoincident(rho))
+	// On the axis J_1(rho*krho) = 0, so these terms vanish (only there, see ComputeExpTermsKii_SpatialS1()).
+	if (!(rho > 0.0))
 		return;
 
 	for (int ii = 1; ii < terms.size(); ii++)
@@ -2563,8 +2569,8 @@ void QuasistaticMGF::ComputeTermsCurlKmi_SpatialS2(double z, double zp, double r
 	
 	std::fill(terms.begin(), terms.end(), 0.0);
 	
-	// If rho ~ 0, J_2(rho*krho) ~ 0, so spatial terms are ~0.
-	if (LaterallyCoincident(rho))
+	// On the axis J_2(rho*krho) = 0, so these terms vanish (only there, see ComputeExpTermsKii_SpatialS1()).
+	if (!(rho > 0.0))
 		return;
 
 	for (int ii = 1; ii < terms.size(); ii++)
