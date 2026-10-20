@@ -39,6 +39,7 @@
 
 
 #include <algorithm>
+#include <atomic>
 #include <complex>
 #include <vector>
 #include <cmath>
@@ -105,6 +106,21 @@ void TanhSinhBoost(const F f, double a, double b, double tol, std::complex<doubl
 
 template<class F>
 void ExpSinhBoost(const F f, double a, double tol, std::complex<double> &result);
+
+
+// ====== Diagnostics ======
+
+#define STRATA_SOMMERFELD_DIAGNOSTICS 1
+
+/*! \brief Number of Sommerfeld tails (all threads) whose partition extrapolation ended without meeting its tolerance.
+PartExtrap() then returns its last estimate; a warning is printed the first time this happens.*/
+inline std::atomic<long> &SommerfeldTailNonConvergedCounter()
+{
+	static std::atomic<long> count(0);
+	return count;
+}
+
+inline long SommerfeldTailNonConvergedCount() { return SommerfeldTailNonConvergedCounter().load(); }
 
 
 // ==================================================================================
@@ -283,13 +299,15 @@ template<class F>
 void PartExtrap(const F f, double a, double q, double tol, std::complex<double> &val)
 {
 	
-	// Initialize
-	int kmax = 10;
-	double eps = 1.0e-6;
+	// Initialize. The partition budget used to be 11 partitions; slowly converging tails (e.g. same-height points)
+	// were then returned unconverged without notice.
+	constexpr int kmax = 30;
+	double eps = tol;
 	std::complex<double> old = 1.0e300, u, w, s = 0.0;
 	std::complex<double> A [kmax + 1], B [kmax + 1];
 	double X [kmax + 2];
 	X[0] = a;
+	bool converged = false;
 
 	// Begin extrapolated integration over partitions
 	for (int kk = 1; kk <= kmax+1; kk++)
@@ -301,18 +319,29 @@ void PartExtrap(const F f, double a, double q, double tol, std::complex<double> 
 		CheckComplexResultForInfOrNaN(u, "the TanhSinh partition integration result");
 		// Stop when the tail underflows; skipping would leave a gap in A and B.
 		if (std::abs(u) < std::numeric_limits<double>::min())
+		{
+			converged = true;
 			break;
+		}
 
 		// Execute extrapolation		
 		s += u;
 		w = u; 
 		val = LevinSidi(kk-1, s, w, X, A, B);
 		CheckComplexResultForInfOrNaN(val, "the Levin-Sidi extrapolation result");
-		if (kk > 0 && std::abs(val - old) < tol*std::abs(val))
+		if (std::abs(val - old) < tol*std::abs(val))
+		{
+			converged = true;
 			break;
+		}
 		
 		old = val;
 	}
+
+	if (!converged && SommerfeldTailNonConvergedCounter()++ == 0)
+		std::cerr << "[WARNING] PartExtrap(): a Sommerfeld tail did not converge to the relative tolerance " << tol << " within "
+		          << kmax + 1 << " partitions; its last extrapolated value is used. Later occurrences are only counted, see "
+		          << "SommerfeldTailNonConvergedCount()." << std::endl;
 	
 	return;
 
