@@ -118,15 +118,17 @@ void QuasistaticMGF::SetLayers(int _i, int _m)
 		throw std::logic_error("[ERROR] QuasistaticMGF::SetLayers(): Must call Initialize() before setting layer indices.");
 	}
 
-	// if (_i < -1 || _i > lm->layers.size())
-	// {
-	// 	throw std::domain_error("[ERROR] QuasistaticMGF::SetLayers(): Source layer index is out of bounds.");
-	// }
-
-	// if (_m < -1 || _m > lm->layers.size())
-	// {
-	// 	throw std::domain_error("[ERROR] QuasistaticMGF::SetLayers(): Observation layer index is out of bounds.");
-	// }
+	// Valid indices: -1 (top half-space), 0..N-1 (layers), N (bottom half-space). Others used to index the layer
+	// data out of range. A PEC half-space is not a region in which points can lie.
+	const int N_layers = (int)lm->layers.size();
+	if (_i < -1 || _i > N_layers || _m < -1 || _m > N_layers)
+	{
+		throw std::out_of_range("[ERROR] QuasistaticMGF::SetLayers(): Layer index out of bounds (source " + std::to_string(_i) + ", observation " + std::to_string(_m) + ").");
+	}
+	if (((_i == -1 || _m == -1) && lm->isPEC_top) || ((_i == N_layers || _m == N_layers) && lm->isPEC_bot))
+	{
+		throw std::out_of_range("[ERROR] QuasistaticMGF::SetLayers(): A point cannot lie in a PEC half-space.");
+	}
 
 	// ---------------------------
 	
