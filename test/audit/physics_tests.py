@@ -239,7 +239,8 @@ def check_spatial(probe, name, f, variant, pts, curl_type):
     settings = dict(SETTING_VARIANTS[variant], compute_curl=1, curl_type=curl_type)
     q = []
     for (rho, z, zp, s, o, kind) in pts:
-        q.append(['mgf', float(rho)*np.cos(0.3), float(rho)*np.sin(0.3), float(z), float(zp), int(s), int(o)])
+        # Strata finds the layers itself: it merges adjacent layers of identical material, which renumbers them
+        q.append(['mgf', float(rho)*np.cos(0.3), float(rho)*np.sin(0.3), float(z), float(zp), FIND, FIND])
     job = {'stack': stack_job(layers, top, bot), 'freq': f, 'settings': settings, 'queries': q}
     out = run_probe(probe, job)
     return out
@@ -268,7 +269,8 @@ def compare_spatial(res, ref, curl_type, phi=0.3):
     # component errors relative to the largest diagonal entry (off-diagonal components can be ~0)
     gscale = max(abs(G[0]), abs(G[8]))
     out['G_err'] = (np.abs(Gs - G)/gscale).tolist()
-    out['phi_err'] = abs(ps - Gphi)/abs(Gphi)
+    # G_phi can vanish (e.g. on a PEC wall); measure it against the scale of the kernel as a whole
+    out['phi_err'] = abs(ps - Gphi)/max(abs(Gphi), gscale)
     if 'curl' in res:
         Hs = cvec(res['curl'])
         Href = -H if curl_type == 'GHJ' else E
