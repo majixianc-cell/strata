@@ -813,7 +813,10 @@ void MGF::ComputeCurlMGF(double x_diff, double y_diff, double z, double zp, std:
 	}
 	else if (s.method == MGF_INTERPOLATE)
 	{
-		ComputeMGF_Interpolation(rho, z, zp, _G, CurlMGF_table, s.components_curl);
+		if (s.interpolate_z)
+			ComputeMGF_Interpolation_withZ(rho, z, zp, _G, CurlMGF_table, s.components_curl);
+		else
+			ComputeMGF_Interpolation(rho, z, zp, _G, CurlMGF_table, s.components_curl);
 	}
 
 	if (s.extract_quasistatic || s.method == MGF_QUASISTATIC)
