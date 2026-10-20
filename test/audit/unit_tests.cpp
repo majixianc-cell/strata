@@ -1,0 +1,907 @@
+// Strata audit: assertion-based regression tests.
+//
+// Each test runs in a forked child process with a time limit, so that a crash or an endless loop in one test is
+// reported as such and does not stop the others. Exit status = number of tests that did not pass.
+//
+//   strata_unit_tests [FILTER]        run the tests whose id contains FILTER (all tests if omitted)
+//
+// Closed forms used below (Strata normalisation, exp(+jwt)): in a homogeneous medium
+//   G_xx = G_yy = G_zz = mu_r exp(-jkR)/(4 pi R),  G_phi = (eps0/eps) exp(-jkR)/(4 pi R),  G_xz = G_zx = 0.
+
+#include <algorithm>
+#include <array>
+#include <cfenv>
+#include <cmath>
+#include <complex>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <functional>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <map>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include <chrono>
+#include <ctime>
+#include <stdlib.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#if defined(_OPENMP)
+	#include <omp.h>
+#endif
+
+#include <boost/math/quadrature/tanh_sinh.hpp>
+#include <boost/math/quadrature/exp_sinh.hpp>
+#include <boost/math/quadrature/gauss_kronrod.hpp>
+#include <boost/math/quadrature/trapezoidal.hpp>
+#include <boost/math/special_functions/bessel.hpp>
+#include "libAmosBessel.h"
+
+// White-box access to the interpolation-table internals (AddRhoTable, AddZTable, z_to_idx, ...).
+#define private public
+#include "MGF.hpp"
+#include "sommerfeld_integrals.hpp"
+#undef private
+
+#include "constants.hpp"
+
+using C = std::complex<double>;
+
+namespace
+{
+
+struct T
+{
+	bool ok = true;
+	std::ostringstream log;
+	void check(bool cond, const std::string &what)
+	{
+		if (!cond) ok = false;
+		log << (cond ? "      ok    " : "      FAIL  ") << what << "\n";
+	}
+	void note(const std::string &what) { log << "      note  " << what << "\n"; }
+};
+
+std::string fmt(double v, int p = 6)
+{
+	std::ostringstream o;
+	o << std::setprecision(p) << v;
+	return o.str();
+}
+std::string fmt(C v, int p = 6) { return "(" + fmt(v.real(), p) + "," + fmt(v.imag(), p) + ")"; }
+
+double rel(C a, C b) { return std::abs(a - b)/std::max(std::abs(b), 1e-300); }
+
+struct Case
+{
+	std::string id, title;
+	std::function<void(T &)> fn;
+	int timeout = 120;
+};
+
+std::vector<Case> &registry()
+{
+	static std::vector<Case> r;
+	return r;
+}
+
+struct Reg
+{
+	Reg(const std::string &id, const std::string &title, std::function<void(T &)> fn, int timeout = 120)
+	{
+		registry().push_back({id, title, fn, timeout});
+	}
+};
+
+// ------------------------------------------------------------------------------------------------
+// Fixtures
+// ------------------------------------------------------------------------------------------------
+
+// Two dielectric layers between air and an eps_r = 6 half-space (used in the Codex review reproductions).
+LayerManager two_layer(double f = 1e9)
+{
+	LayerManager lm;
+	lm.AddLayer(0.0, 1e-3, {2.3, 0.0}, 1.0, 0.0, 0.0);
+	lm.AddLayer(-1e-3, 0.0, {4.5, 0.0}, 1.0, 0.0, 0.0);
+	lm.SetHalfspaces(1.0, 1.0, 0.0, 6.0, 1.0, 0.0, false, false);
+	lm.ProcessLayers(f);
+	return lm;
+}
+
+// Homogeneous medium represented by one layer whose half-spaces have the same material.
+LayerManager homogeneous(double epsr, double mur, double sigma, double zlo, double zhi, double f)
+{
+	LayerManager lm;
+	lm.AddLayer(zlo, zhi, {epsr, 0.0}, mur, sigma, 0.0);
+	lm.SetHalfspaces(epsr, mur, sigma, epsr, mur, sigma, false, false);
+	lm.ProcessLayers(f);
+	return lm;
+}
+
+C g0(C k, double R) { return std::exp(-strata::J*k*R)/(4.0*M_PI*R); }
+
+MGF_settings quiet(int method)
+{
+	MGF_settings s;
+	s.verbose = false;
+	s.method = method;
+	return s;
+}
+
+// ================================================================================================
+// Layer management
+// ================================================================================================
+
+Reg lm_merge("LM-merge", "identical adjacent layers are merged, different ones are not", [](T &t) {
+	LayerManager a;
+	a.AddLayer(0.0, 1e-3, {4.0, 0.0}, 1.0, 0.0, 0.0);
+	a.AddLayer(-1e-3, 0.0, {4.0, 0.0}, 1.0, 0.0, 0.0);
+	a.ProcessLayers(1e9);
+	t.check(a.layers.size() == 1, "two identical eps_r=4 layers -> 1 layer (got " + std::to_string(a.layers.size()) + ")");
+	if (a.layers.size() == 1)
+		t.check(a.layers[0].zmin == -1e-3 && a.layers[0].zmax == 1e-3 && std::abs(a.layers[0].h - 2e-3) < 1e-15,
+		        "merged extent [-1e-3, 1e-3]");
+	LayerManager b;
+	b.AddLayer(0.0, 1e-3, {4.0, 0.0}, 1.0, 0.0, 0.0);
+	b.AddLayer(-1e-3, 0.0, {4.5, 0.0}, 1.0, 0.0, 0.0);
+	b.ProcessLayers(1e9);
+	t.check(b.layers.size() == 2, "eps_r 4 / 4.5 stay separate");
+	LayerManager c;
+	c.AddLayer(0.0, 1e-3, {4.0, 0.0}, 1.0, 0.0, 0.0);
+	c.AddLayer(-1e-3, 0.0, {4.0, 0.0}, 1.0, 0.01, 0.0);
+	c.ProcessLayers(1e9);
+	t.check(c.layers.size() == 2, "different conductivity stays separate");
+	LayerManager d;
+	d.AddLayer(0.0, 1e-3, {4.0, -0.1}, 1.0, 0.0, 0.0);
+	d.AddLayer(-1e-3, 0.0, {4.0, -0.2}, 1.0, 0.0, 0.0);
+	d.ProcessLayers(1e9);
+	t.check(d.layers.size() == 2, "different epsr_im stays separate");
+});
+
+Reg lm_find("LM-findlayer", "FindLayer at the top surface, interfaces and outside the stack", [](T &t) {
+	LayerManager lm;
+	lm.AddLayer(0.0, 1.0, {2.0, 0.0}, 1.0, 0.0, 0.0);
+	lm.AddLayer(-1.0, 0.0, {4.0, 0.0}, 1.0, 0.0, 0.0);
+	lm.ProcessLayers(1e9);
+	t.check(lm.FindLayer(1.0) == 0, "top surface z=1 -> layer 0 (got " + std::to_string(lm.FindLayer(1.0)) + ")");
+	t.check(lm.FindLayer(0.999) == 0, "z=0.999 -> layer 0");
+	t.check(lm.FindLayer(0.0) == 0, "interior interface -> layer above");
+	t.check(lm.FindLayer(-0.5) == 1, "z=-0.5 -> layer 1");
+	t.check(lm.FindLayer(-1.0) == 1, "bottom surface -> bottom layer");
+	t.check(lm.FindLayer(1.5) == -1, "above -> -1");
+	t.check(lm.FindLayer(-1.5) == 2, "below -> N");
+	LayerManager one;
+	one.AddLayer(0.0, 1.0, {2.0, 0.0}, 1.0, 0.0, 0.0);
+	one.ProcessLayers(1e9);
+	t.check(one.FindLayer(1.0) == 0 && one.FindLayer(0.0) == 0, "single layer: both surfaces -> 0");
+});
+
+Reg lm_bounds("LM-getz-bounds", "GetZmin/GetZmax/GetHeight reject index N+1", [](T &t) {
+	LayerManager lm = two_layer();
+	int n = (int)lm.layers.size();
+	for (int which = 0; which < 3; ++which)
+	{
+		bool thrown = false;
+		try
+		{
+			if (which == 0) lm.GetZmin(n + 1);
+			if (which == 1) lm.GetZmax(n + 1);
+			if (which == 2) lm.GetHeight(n + 1);
+		}
+		catch (const std::out_of_range &) { thrown = true; }
+		t.check(thrown, std::string(which == 0 ? "GetZmin" : which == 1 ? "GetZmax" : "GetHeight") + "(N+1) throws out_of_range");
+	}
+	t.check(lm.GetZmax(-1) > lm.layers[0].zmax && lm.GetZmin(n) < lm.layers.back().zmin, "half-space placeholders still work");
+});
+
+void write_file(const std::string &path, const std::string &text)
+{
+	std::ofstream o(path, std::ios::binary);
+	o << text;
+}
+
+Reg lm_tech("LM-tech", ".tech parser with LF and CRLF line endings", [](T &t) {
+	const std::string body[] = {"// stack-up", "Dielectric", "0 top 0 0 1.0 1.0 0.0", "1 L1 0 100 4.0 1.0 0.0",
+	                            "2 L2 -100 100 2.0 1.0 0.0", "3 bot 0 0 1.0 1.0 -1"};
+	for (int crlf = 0; crlf < 2; ++crlf)
+	{
+		std::string text;
+		for (const auto &l : body) text += l + (crlf ? "\r\n" : "\n");
+		std::string path = "/tmp/strata_unit_" + std::to_string(getpid()) + (crlf ? "_crlf" : "_lf") + ".tech";
+		write_file(path, text);
+		LayerManager lm;
+		lm.ProcessTechFile(path);
+		std::remove(path.c_str());
+		std::string tag = crlf ? "CRLF: " : "LF: ";
+		t.check(lm.layers.size() == 2, tag + "2 layers parsed (got " + std::to_string(lm.layers.size()) + ")");
+		if (lm.layers.size() == 2)
+			t.check(std::abs(lm.layers[0].zmax - 100e-9) < 1e-18 && std::abs(lm.layers[1].zmin + 100e-9) < 1e-18 &&
+			        lm.layers[0].epsr.real() == 4.0, tag + "geometry and eps_r");
+		t.check(lm.isPEC_bot, tag + "PEC bottom half-space");
+	}
+});
+
+Reg lm_tech_missing("LM-tech-missing", "missing .tech file raises an error instead of looping", [](T &t) {
+	LayerManager lm;
+	bool thrown = false;
+	try { lm.ProcessTechFile("/nonexistent/strata_missing.tech"); }
+	catch (const std::exception &) { thrown = true; }
+	t.check(thrown, "exception for a missing file");
+}, 10);
+
+Reg lm_hs_im("LM-halfspace-epsr-im", "epsr_im of a half-space is honoured like for layers", [](T &t) {
+	std::string path = "/tmp/strata_unit_" + std::to_string(getpid()) + ".yaml";
+	write_file(path, "unit: um\ndielectric_layers:\n    L1:\n        {zmin: 0, h: 1, epsr: 4, epsr_im: -0.4}\n"
+	                 "top_halfspace:\n    {epsr: 2, epsr_im: -0.2}\nbottom_halfspace:\n    {epsr: 3, epsr_im: -0.3}\n");
+	LayerManager lm;
+	lm.ProcessTechFile(path);
+	std::remove(path.c_str());
+	lm.ProcessLayers(1e9);
+	t.check(std::abs(lm.eps[0].imag()/strata::eps0 + 0.4) < 1e-12, "layer epsr_im = -0.4 (control)");
+	t.check(std::abs(lm.eps_top.imag()/strata::eps0 + 0.2) < 1e-12, "top half-space epsr_im = -0.2 (got " + fmt(lm.eps_top.imag()/strata::eps0) + ")");
+	t.check(std::abs(lm.eps_bot.imag()/strata::eps0 + 0.3) < 1e-12, "bottom half-space epsr_im = -0.3");
+});
+
+Reg lm_znodes("LM-znodes-thin", "SetZNodesInterp keeps every node inside its (thin) layer", [](T &t) {
+	LayerManager lm;
+	lm.AddLayer(0.0, 10e-9, {4.0, 0.0}, 1.0, 0.0, 0.0);
+	lm.AddLayer(-5e-9, 0.0, {2.0, 0.0}, 1.0, 0.0, 0.0);
+	lm.AddLayer(-1e-6, -5e-9, {3.0, 0.0}, 1.0, 0.0, 0.0);
+	lm.ProcessLayers(1e9);
+	std::vector<double> nodes;
+	lm.SetZNodesInterp(1e9, nodes, 10);
+	int outside = 0;
+	for (double z : nodes)
+	{
+		int layer = lm.FindLayer(z);
+		if (layer < 0 || layer >= (int)lm.layers.size()) ++outside;
+	}
+	bool ordered = true;
+	// Each layer contributes at least two nodes with zmin <= z1 < z2 <= zmax.
+	for (size_t k = 0; k + 1 < nodes.size(); k += 2)
+		if (!(nodes[k] < nodes[k + 1])) ordered = false;
+	t.check(outside == 0, "no node outside the stack");
+	t.check(ordered, "node pairs ordered within each thin layer");
+	int bad = 0;
+	for (size_t k = 0; k < nodes.size(); ++k)
+	{
+		bool inside_any = false;
+		for (auto &l : lm.layers)
+			if (nodes[k] >= l.zmin && nodes[k] <= l.zmax) inside_any = true;
+		if (!inside_any) ++bad;
+	}
+	t.check(bad == 0, "every node lies within some layer");
+	std::ostringstream o;
+	for (double z : nodes) o << z << " ";
+	t.note("nodes: " + o.str());
+});
+
+Reg lm_empty("LM-empty", "ProcessLayers without any layer raises an error", [](T &t) {
+	LayerManager lm;
+	bool thrown = false;
+	try { lm.ProcessLayers(1e9); }
+	catch (const std::exception &) { thrown = true; }
+	t.check(thrown, "exception for an empty stack");
+}, 10);
+
+// ================================================================================================
+// Bessel zeros and quadrature
+// ================================================================================================
+
+Reg bz_table("BZ-table", "BesselJ_NextZero beyond the 500 tabulated zeros", [](T &t) {
+	for (int v = 0; v <= 2; ++v)
+		for (double x : {10.0, 1000.0, 1566.0, 2000.0, 5000.0})
+		{
+			double z = BesselJ_NextZero(v, x);
+			double jz = boost::math::cyl_bessel_j(v, z);
+			t.check(z >= x && z <= x + M_PI + 1e-9 && std::abs(jz) < 1e-4,
+			        "J" + std::to_string(v) + " next zero after " + fmt(x) + " = " + fmt(z, 10) + " (J=" + fmt(jz, 3) + ")");
+		}
+});
+
+Reg qd_tanhsinh("QD-tanhsinh", "TanhSinh reaches the requested tolerance on smooth integrals", [](T &t) {
+	struct I { std::string name; std::function<C(double)> f; double a, b; C exact; };
+	std::vector<I> cases = {
+		{"exp(x) on [0,1]", [](double x) { return C(std::exp(x)); }, 0.0, 1.0, C(std::exp(1.0) - 1.0)},
+		{"1/x on [1,2]", [](double x) { return C(1.0/x); }, 1.0, 2.0, C(std::log(2.0))},
+		{"cos(10x)+i sin(3x) on [0,2]", [](double x) { return C(std::cos(10*x), std::sin(3*x)); }, 0.0, 2.0,
+		 C(std::sin(20.0)/10.0, (1.0 - std::cos(6.0))/3.0)},
+		{"1/(1+25x^2) on [-1,1]", [](double x) { return C(1.0/(1.0 + 25*x*x)); }, -1.0, 1.0, C(0.4*std::atan(5.0))},
+	};
+	for (auto &c : cases)
+	{
+		C v;
+		TanhSinh(c.f, c.a, c.b, 1e-12, v);
+		double e = rel(v, c.exact);
+		t.check(e < 1e-10, c.name + ": rel err " + fmt(e, 3) + " (eps 1e-12)");
+	}
+});
+
+Reg qd_partextrap("QD-partextrap-nonconv", "PartExtrap does not silently return an unconverged value", [](T &t) {
+	auto f = [](double x) { return C(std::cos(x)*std::exp(-0.01*x)); };
+	C v = 0.0;
+	bool thrown = false;
+#ifdef STRATA_SOMMERFELD_DIAGNOSTICS
+	long before = SommerfeldTailNonConvergedCount();
+#else
+	long before = 0;
+#endif
+	try { PartExtrap(f, 0.0, M_PI, 0.0, v); }
+	catch (const std::exception &) { thrown = true; }
+#ifdef STRATA_SOMMERFELD_DIAGNOSTICS
+	long after = SommerfeldTailNonConvergedCount();
+#else
+	long after = 0;
+#endif
+	t.check(thrown || after == before + 1, "non-convergence is reported (exception or diagnostic counter)");
+}, 30);
+
+// ================================================================================================
+// Direct integration: closed forms
+// ================================================================================================
+
+Reg qd_homog("QD-homogeneous", "INTEGRATE in a homogeneous medium matches exp(-jkR)/(4 pi R)", [](T &t) {
+	struct P { double epsr, mur, sigma, f, z, zp, rho; };
+	std::vector<P> pts = {
+		{4.0, 1.0, 0.0, 1e9, 0.0, 1e-3, 3e-3}, {4.0, 1.0, 0.0, 1e9, 0.0, 0.0, 3e-3}, {2.0, 2.0, 0.02, 3e9, -2e-3, 4e-3, 1e-2},
+		{1.0, 1.0, 0.0, 30e9, 0.0, 2e-3, 0.05}, {11.9, 1.0, 10.0, 1e8, 0.0, 1e-5, 2e-5},
+	};
+	for (auto &p : pts)
+	{
+		LayerManager lm = homogeneous(p.epsr, p.mur, p.sigma, -0.05, 0.05, p.f);
+		MGF mgf;
+		MGF_settings s = quiet(MGF_INTEGRATE);
+		mgf.Initialize(p.f, lm, s);
+		mgf.SetLayers(0, 0);
+		std::array<C, 9> G;
+		C phi;
+		mgf.ComputeMGF(p.rho, 0.0, p.z, p.zp, G, phi);
+		double R = std::sqrt(p.rho*p.rho + (p.z - p.zp)*(p.z - p.zp));
+		C k = mgf.lm.k[0];
+		C gref = g0(k, R);
+		double e1 = rel(G[0], p.mur*gref), e2 = rel(G[8], p.mur*gref), e3 = rel(phi, gref*strata::eps0/mgf.lm.eps[0]);
+		double e4 = std::abs(G[2])/std::abs(gref) + std::abs(G[6])/std::abs(gref);
+		t.check(std::max({e1, e2, e3, e4}) < 1e-6, "eps_r=" + fmt(p.epsr) + " mu_r=" + fmt(p.mur) + " sigma=" + fmt(p.sigma) + " f=" +
+		        fmt(p.f) + " rho=" + fmt(p.rho) + " dz=" + fmt(p.z - p.zp) + ": Gxx " + fmt(e1, 3) + " Gzz " + fmt(e2, 3) +
+		        " Gphi " + fmt(e3, 3) + " |Gxz|+|Gzx| " + fmt(e4, 3));
+	}
+}, 300);
+
+Reg qd_nearaxis("QD-nearaxis", "small positive rho with a large vertical separation", [](T &t) {
+	const double f = 3e9;
+	LayerManager lm = homogeneous(2.0, 1.0, 0.0, -0.01, 0.01, f);
+	MGF mgf;
+	MGF_settings s = quiet(MGF_INTEGRATE);
+	mgf.Initialize(f, lm, s);
+	mgf.SetLayers(0, 0);
+	for (double rho : {0.0, 1e-14, 1e-10, 1e-6, 2e-3})
+	{
+		std::array<C, 9> G;
+		C phi;
+		mgf.ComputeMGF(rho, 0.0, -0.003, 0.006, G, phi);
+		double R = std::sqrt(rho*rho + 0.009*0.009);
+		C gref = g0(mgf.lm.k[0], R);
+		double e = std::max(rel(G[0], gref), rel(phi, gref/2.0));
+		t.check(e < 1e-6, "rho=" + fmt(rho) + ": rel err " + fmt(e, 3));
+	}
+}, 120);
+
+Reg qd_farrho("QD-large-rho", "rho beyond the tabulated Bessel zeros (a*rho > 1566.87)", [](T &t) {
+	const double f = 30e9;
+	LayerManager lm = homogeneous(1.0, 1.0, 0.0, -0.01, 0.01, f);
+	MGF mgf;
+	MGF_settings s = quiet(MGF_INTEGRATE);
+	mgf.Initialize(f, lm, s);
+	mgf.SetLayers(0, 0);
+	for (double rho : {1.0, 3.0})
+	{
+		std::array<C, 9> G;
+		C phi;
+		mgf.ComputeMGF(rho, 0.0, 0.0, 1e-3, G, phi);
+		double R = std::sqrt(rho*rho + 1e-6);
+		C gref = g0(mgf.lm.k[0], R);
+		double e = rel(G[0], gref);
+		t.check(e < 1e-5, "rho=" + fmt(rho) + " m (a*rho=" + fmt(1.2*std::abs(mgf.lm.k[0])*rho) + "): rel err " + fmt(e, 3));
+	}
+}, 600);
+
+Reg ex_homog("EX-homogeneous", "extract_homogeneous adds the extracted term back in the spatial domain", [](T &t) {
+	const double f = 1e9;
+	LayerManager lm = homogeneous(2.0, 1.0, 0.0, -0.01, 0.01, f);
+	MGF mgf;
+	MGF_settings s = quiet(MGF_INTEGRATE);
+	s.extract_homogeneous = true;
+	mgf.Initialize(f, lm, s);
+	mgf.SetLayers(0, 0);
+	std::array<C, 9> G;
+	C phi;
+	mgf.ComputeMGF(3e-3, 0.0, 0.0, 2e-3, G, phi);
+	double R = std::sqrt(9e-6 + 4e-6);
+	C gref = g0(mgf.lm.k[0], R);
+	t.check(rel(G[0], gref) < 1e-6, "Gxx rel err " + fmt(rel(G[0], gref), 3));
+	t.check(rel(phi, gref/2.0) < 1e-6, "Gphi rel err " + fmt(rel(phi, gref/2.0), 3));
+}, 120);
+
+Reg uq_lowfreq("UQ-lowfreq", "extract_quasistatic agrees with plain integration at very low frequency", [](T &t) {
+	const double f = 1e6;
+	LayerManager lm;
+	lm.AddLayer(0.0, 1e-6, {4.0, 0.0}, 1.0, 0.0, 0.0);
+	lm.SetHalfspaces(1.0, 1.0, 0.0, 1.0, 1.0, 0.0, false, true);
+	lm.ProcessLayers(f);
+	std::array<C, 9> Ga, Gb;
+	C pa, pb;
+	for (int qs = 0; qs < 2; ++qs)
+	{
+		MGF mgf;
+		MGF_settings s = quiet(MGF_INTEGRATE);
+		s.extract_quasistatic = qs;
+		mgf.Initialize(f, lm, s);
+		mgf.SetLayers(0, 0);
+		mgf.ComputeMGF(5e-6, 0.0, 0.5e-6, 0.5e-6, qs ? Gb : Ga, qs ? pb : pa);
+	}
+	t.check(rel(Gb[0], Ga[0]) < 1e-4, "Gxx: plain " + fmt(Ga[0]) + " vs qs " + fmt(Gb[0]) + " rel " + fmt(rel(Gb[0], Ga[0]), 3));
+	t.check(rel(pb, pa) < 1e-4, "Gphi: plain " + fmt(pa) + " vs qs " + fmt(pb) + " rel " + fmt(rel(pb, pa), 3));
+}, 300);
+
+Reg hs_obs("HS-observation", "observation point in a lossless half-space gives a finite MGF", [](T &t) {
+	const double f = 1e9;
+	LayerManager lm = two_layer(f);
+	MGF mgf;
+	MGF_settings s = quiet(MGF_INTEGRATE);
+	mgf.Initialize(f, lm, s);
+	for (auto zz : std::vector<std::array<double, 2>>{{2e-3, 0.5e-3}, {0.5e-3, 2e-3}, {-2e-3, 0.5e-3}, {2e-3, 3e-3}})
+	{
+		mgf.SetLayers(mgf.lm.FindLayer(zz[1]), mgf.lm.FindLayer(zz[0]));
+		std::array<C, 9> G;
+		C phi;
+		std::string err;
+		try { mgf.ComputeMGF(1e-3, 0.0, zz[0], zz[1], G, phi); }
+		catch (const std::exception &e) { err = e.what(); }
+		bool finite = err.empty() && std::isfinite(std::abs(G[0])) && std::isfinite(std::abs(G[2])) &&
+		              std::isfinite(std::abs(G[6])) && std::isfinite(std::abs(G[8])) && std::isfinite(std::abs(phi));
+		t.check(finite, "z=" + fmt(zz[0]) + " zp=" + fmt(zz[1]) + ": finite (Gxx=" + fmt(G[0]) + ")" + (err.empty() ? "" : " err: " + err));
+	}
+}, 300);
+
+// ================================================================================================
+// Spectral API state
+// ================================================================================================
+
+void setup_spec(SpectralMGF &s, LayerManager &lm, int i, int m, double zp, double z, C kr, std::string order = "SOK")
+{
+	s.Initialize(&lm, 1e9);
+	s.SetLayers(i, m);
+	for (char c : order)
+	{
+		if (c == 'S') s.SetSourcePoint(zp);
+		if (c == 'O') s.SetObservationPoint(z);
+		if (c == 'K') s.SetRadialWaveNumber(kr);
+	}
+}
+
+std::array<C, 5> potentials(SpectralMGF &s)
+{
+	s.ComputeSpectralMGF();
+	std::array<C, 5> K;
+	for (int c = 0; c < 5; ++c) K[c] = s.GetResult(c);
+	return K;
+}
+
+double maxrel5(const std::array<C, 5> &a, const std::array<C, 5> &b)
+{
+	double e = 0;
+	for (int c = 0; c < 5; ++c) e = std::max(e, std::abs(a[c] - b[c])/std::max(std::abs(b[c]), 1e-300));
+	return e;
+}
+
+Reg sp_state("SP-state", "SpectralMGF results do not depend on call history or setter order", [](T &t) {
+	LayerManager lm = two_layer();
+	const C kr(80.0, 10.0);
+	struct Cfg { int i, m; double zp, z; };
+	for (Cfg c : {Cfg{0, 1, 0.7e-3, -0.3e-3}, Cfg{1, 0, -0.3e-3, 0.7e-3}, Cfg{0, 0, 0.7e-3, 0.3e-3}, Cfg{0, -1, 0.7e-3, 2e-3}})
+	{
+		std::string tag = "i=" + std::to_string(c.i) + " m=" + std::to_string(c.m) + ": ";
+		SpectralMGF fresh;
+		setup_spec(fresh, lm, c.i, c.m, c.zp, c.z, kr);
+		auto ref = potentials(fresh);
+		auto again = potentials(fresh);
+		t.check(maxrel5(again, ref) < 1e-12, tag + "repeated ComputeSpectralMGF (" + fmt(maxrel5(again, ref), 3) + ")");
+		for (std::string order : {"KSO", "KOS", "SKO", "OKS", "OSK"})
+		{
+			SpectralMGF s;
+			setup_spec(s, lm, c.i, c.m, c.zp, c.z, kr, order);
+			double e = maxrel5(potentials(s), ref);
+			t.check(e < 1e-12, tag + "setter order " + order + " (" + fmt(e, 3) + ")");
+		}
+		for (int ghj = 0; ghj < 2; ++ghj)
+		{
+			SpectralMGF s;
+			setup_spec(s, lm, c.i, c.m, c.zp, c.z, kr);
+			potentials(s);
+			if (ghj) s.SetCurlToGHJ(); else s.SetCurlToGEM();
+			s.ComputeCurlSpectralMGF();
+			double e = maxrel5(potentials(s), ref);
+			t.check(e < 1e-12, tag + "potentials after a " + (ghj ? std::string("GHJ") : std::string("GEM")) + " curl call (" + fmt(e, 3) + ")");
+		}
+		// A curl call must not depend on a preceding curl of the other type either.
+		SpectralMGF h1, h2;
+		setup_spec(h1, lm, c.i, c.m, c.zp, c.z, kr);
+		h1.SetCurlToGHJ();
+		h1.ComputeCurlSpectralMGF();
+		setup_spec(h2, lm, c.i, c.m, c.zp, c.z, kr);
+		h2.SetCurlToGEM();
+		h2.ComputeCurlSpectralMGF();
+		h2.SetCurlToGHJ();
+		h2.ComputeCurlSpectralMGF();
+		double e = 0;
+		for (int n = 0; n < 4; ++n) e = std::max(e, rel(h2.GetResultCurl(n), h1.GetResultCurl(n)));
+		t.check(e < 1e-12, tag + "GHJ after GEM on the same object (" + fmt(e, 3) + ")");
+	}
+});
+
+Reg sp_recip("SP-curl-reciprocity", "G_HJ(r,r') and G_EM(r',r) satisfy the reciprocity mapping", [](T &t) {
+	LayerManager lm = two_layer();
+	const C kr(80.0, 10.0);
+	struct Cfg { int i, m; double zp, z; };
+	const int rev[] = {0, 1, 3, 2};
+	for (Cfg c : {Cfg{0, 0, 0.7e-3, 0.3e-3}, Cfg{0, 1, 0.7e-3, -0.3e-3}, Cfg{1, 0, -0.3e-3, 0.7e-3}, Cfg{0, -1, 0.7e-3, 2e-3},
+	              Cfg{0, 2, 0.7e-3, -2e-3}, Cfg{-1, 2, 2e-3, -2e-3}})
+	{
+		SpectralMGF h, e;
+		setup_spec(h, lm, c.i, c.m, c.zp, c.z, kr);
+		h.SetCurlToGHJ();
+		h.ComputeCurlSpectralMGF();
+		setup_spec(e, lm, c.m, c.i, c.z, c.zp, kr);
+		e.SetCurlToGEM();
+		e.ComputeCurlSpectralMGF();
+		double err = 0;
+		for (int n = 0; n < 4; ++n)
+			err = std::max(err, rel(h.GetResultCurl(n), e.GetResultCurl(rev[n])*(n == 1 ? -1.0 : 1.0)));
+		t.check(err < 1e-10, "i=" + std::to_string(c.i) + " m=" + std::to_string(c.m) + ": max rel " + fmt(err, 3));
+	}
+});
+
+// ================================================================================================
+// Quasistatic module
+// ================================================================================================
+
+Reg qs_state("QS-state", "quasistatic results do not depend on a preceding curl call", [](T &t) {
+	LayerManager lm = two_layer();
+	for (double zz : {0.0, 0.3e-3})
+	{
+		QuasistaticMGF q;
+		q.Initialize(&lm, 1e9);
+		q.SetLayers(0, 1);
+		double z = zz > 0 ? -zz : 0.0, zp = zz;
+		q.ComputeQMGF_Spatial(z, zp, 5e-4);
+		C k1 = q.GetResult_Spatial(1), k2 = q.GetResult_Spatial(2);
+		q.ComputeCurlQMGF_Spatial(z, zp, 5e-4);
+		q.ComputeQMGF_Spatial(z, zp, 5e-4);
+		t.check(rel(q.GetResult_Spatial(1), k1) < 1e-14 && rel(q.GetResult_Spatial(2), k2) < 1e-14,
+		        "spatial z=" + fmt(z) + " zp=" + fmt(zp) + ": K1 " + fmt(k1) + " -> " + fmt(q.GetResult_Spatial(1)));
+		QuasistaticMGF r;
+		r.Initialize(&lm, 1e9);
+		r.SetLayers(0, 1);
+		r.ComputeQMGF_Spectral(z, zp, C(80.0, 10.0));
+		C s1 = r.GetResult_Spectral(1);
+		r.ComputeCurlQMGF_Spectral(z, zp, C(80.0, 10.0));
+		r.ComputeQMGF_Spectral(z, zp, C(80.0, 10.0));
+		t.check(rel(r.GetResult_Spectral(1), s1) < 1e-14, "spectral z=" + fmt(z) + ": K1 " + fmt(s1) + " -> " + fmt(r.GetResult_Spectral(1)));
+	}
+});
+
+Reg qs_fresnel("QS-halfspace-fresnel", "Fresnel coefficients seen from a half-space source layer", [](T &t) {
+	LayerManager lm = two_layer();
+	QuasistaticMGF q;
+	q.Initialize(&lm, 1e9);
+	int n = (int)lm.layers.size();
+	Fresnel top = q.GetFresnelCoefficient_Downward(-1);
+	Fresnel bot = q.GetFresnelCoefficient_Upward(n - 1);
+	C fe_top = (lm.eps_top - lm.eps[0])/(lm.eps_top + lm.eps[0]);
+	C fe_bot = (lm.eps_bot - lm.eps[n-1])/(lm.eps_bot + lm.eps[n-1]);
+	t.check(std::abs(top.Fe - fe_top) < 1e-14 && std::abs(top.Fh) < 1e-14, "downward from the top half-space: Fe " + fmt(top.Fe) + " expected " + fmt(fe_top));
+	t.check(std::abs(bot.Fe - fe_bot) < 1e-14 && std::abs(bot.Fh) < 1e-14, "upward from the bottom half-space: Fe " + fmt(bot.Fe) + " expected " + fmt(fe_bot));
+});
+
+// ================================================================================================
+// DCIM
+// ================================================================================================
+
+Reg dc_zero("DC-zero-component", "DCIM with an identically zero spectral component stays finite", [](T &t) {
+	const double f = 10e9;
+	LayerManager lm;
+	lm.AddLayer(-0.5e-3, 0.5e-3, {4.0, 0.0}, 1.0, 0.0, 0.0);
+	lm.SetHalfspaces(1.0, 1.0, 0.0, 1.0, 1.0, 0.0, false, false);
+	lm.ProcessLayers(f);
+	std::vector<double> zn = {0.0};
+	lm.InsertNodes_z(zn);
+	MGF mgf;
+	MGF_settings s = quiet(MGF_DCIM);
+	mgf.Initialize(f, lm, s);
+	mgf.SetLayers(0, 0);
+	std::array<C, 9> G;
+	C phi;
+	mgf.ComputeMGF(1e-3, 0.0, 0.0, 0.0, G, phi);
+	bool finite = true;
+	for (auto g : G) finite = finite && std::isfinite(g.real()) && std::isfinite(g.imag());
+	finite = finite && std::isfinite(std::abs(phi));
+	t.check(finite, "all components finite (Gxx=" + fmt(G[0]) + ", Gxz=" + fmt(G[2]) + ")");
+});
+
+Reg dc_gpof("DC-gpof", "GPOF recovers exact exponentials for any pencil parameter", [](T &t) {
+	const int N = 100;
+	const double dt = 0.05;
+	std::vector<C> amp = {C(1.0, 0.5), C(-0.3, 0.2), C(0.05, 0.0)};
+	std::vector<C> s = {C(-0.2, 1.0), C(-1.0, -3.0), C(-0.05, 0.3)};
+	std::vector<C> y(N);
+	for (int k = 0; k < N; ++k)
+		for (size_t j = 0; j < amp.size(); ++j) y[k] += amp[j]*std::exp(s[j]*(k*dt));
+	DCIM dcim;
+	for (int L : {-1, 30, 60, 80})
+	{
+		std::vector<C> a, alpha, yy = y;
+		dcim.RunGPOF(yy, dt, a, alpha, 1e-10, 1e-16, L);
+		double err = 0, ymax = 0;
+		for (int k = 0; k < N; ++k)
+		{
+			C v = 0.0;
+			for (size_t j = 0; j < a.size(); ++j) v += a[j]*std::exp(alpha[j]*(k*dt));
+			err = std::max(err, std::abs(v - y[k]));
+			ymax = std::max(ymax, std::abs(y[k]));
+		}
+		t.check(err/ymax < 1e-8, "pencil " + std::to_string(L) + ": " + std::to_string(a.size()) + " images, max rel error " + fmt(err/ymax, 3));
+	}
+	std::vector<C> zero(N, 0.0), a, alpha;
+	dcim.RunGPOF(zero, dt, a, alpha);
+	bool finite = true;
+	for (auto v : a) finite = finite && std::isfinite(std::abs(v));
+	for (auto v : alpha) finite = finite && std::isfinite(std::abs(v));
+	t.check(finite, "all-zero samples give finite (or no) images: " + std::to_string(a.size()) + " images");
+});
+
+Reg dc_curl("DC-curl-not-generated", "ComputeCurlMGF with DCIM but compute_curl=false fails cleanly", [](T &t) {
+	const double f = 10e9;
+	LayerManager lm = two_layer(f);
+	std::vector<double> zn = {0.5e-3};
+	lm.InsertNodes_z(zn);
+	MGF mgf;
+	MGF_settings s = quiet(MGF_DCIM);
+	mgf.Initialize(f, lm, s);
+	mgf.SetLayers(0, 0);
+	std::array<C, 9> G;
+	bool thrown = false;
+	try { mgf.ComputeCurlMGF(1e-3, 0.0, 0.5e-3, 0.5e-3, G); }
+	catch (const std::logic_error &) { thrown = true; }
+	t.check(thrown, "logic_error instead of an out-of-range access");
+}, 60);
+
+// ================================================================================================
+// Interpolation
+// ================================================================================================
+
+MGF interp_engine(LayerManager &lm, double f, std::vector<double> z, std::vector<double> rho, bool curl = false, bool interpolate_z = false,
+                  int order = 3, int order_z = 3)
+{
+	lm.InsertNodes_z(z);
+	lm.InsertNodes_rho(rho);
+	MGF mgf;
+	MGF_settings s = quiet(MGF_INTERPOLATE);
+	s.compute_curl = curl;
+	s.interpolate_z = interpolate_z;
+	s.order = order;
+	s.order_z = order_z;
+	mgf.Initialize(f, lm, s);
+	return mgf;
+}
+
+Reg in_range("IN-out-of-range", "interpolation outside the tabulated rho / z range does not read out of bounds", [](T &t) {
+	const double f = 10e9;
+	LayerManager lm;
+	lm.AddLayer(0.0, 1e-3, {4.0, 0.0}, 1.0, 0.0, 0.0);
+	lm.SetHalfspaces(1.0, 1.0, 0.0, 1.0, 1.0, 0.0, false, true);
+	lm.ProcessLayers(f);
+	std::vector<double> rho;
+	strata::linspace(1e-3, 1e-2, 10, rho);
+	MGF mgf = interp_engine(lm, f, {0.5e-3}, rho);
+	mgf.SetLayers(0, 0);
+	std::array<C, 9> G, Gref;
+	C phi, phiref;
+	mgf.ComputeMGF(1e-2, 0.0, 0.5e-3, 0.5e-3, Gref, phiref);
+	for (double r : {2e-2, 5e-4})
+	{
+		bool thrown = false;
+		try { mgf.ComputeMGF(r, 0.0, 0.5e-3, 0.5e-3, G, phi); }
+		catch (const std::out_of_range &) { thrown = true; }
+		t.check(thrown, "rho=" + fmt(r) + " outside [1e-3, 1e-2] raises out_of_range");
+	}
+	mgf.ComputeMGF(1e-2*(1.0 + 1e-13), 0.0, 0.5e-3, 0.5e-3, G, phi);
+	t.check(rel(G[0], Gref[0]) < 1e-9, "rho a rounding error above the last node is accepted");
+	// z below the only node of layer 0 must map to that node (nearest-node rule), not read before the map.
+	mgf.ComputeMGF(5e-3, 0.0, 0.2e-3, 0.5e-3, G, phi);
+	std::array<C, 9> Gn;
+	C pn;
+	mgf.ComputeMGF(5e-3, 0.0, 0.5e-3, 0.5e-3, Gn, pn);
+	t.check(rel(G[0], Gn[0]) < 1e-12, "z below the lowest node uses the nearest node");
+}, 300);
+
+Reg in_zid("IN-adaptive-z-ids", "adding a z-node keeps z-node ids unique and rows consistent", [](T &t) {
+	const double f = 10e9;
+	LayerManager lm;
+	for (int l = 0; l < 5; ++l)
+		lm.AddLayer(-(l + 1)*0.2e-3, -l*0.2e-3, {2.0 + l, 0.0}, 1.0, 0.0, 0.0);
+	lm.SetHalfspaces(1.0, 1.0, 0.0, 1.0, 1.0, 0.0, false, false);
+	lm.ProcessLayers(f);
+	lm.z_nodes.assign(5, {});
+	for (int l = 0; l < 5; ++l) lm.z_nodes[l] = {-(l + 1)*0.2e-3 + 0.05e-3, -l*0.2e-3 - 0.05e-3};
+	std::vector<double> rho = {1e-3, 2e-3, 3e-3, 4e-3};
+	lm.InsertNodes_rho(rho);
+	MGF mgf;
+	MGF_settings s = quiet(MGF_INTERPOLATE);
+	s.interpolate_z = true;
+	s.order = 1;
+	s.order_z = 1;
+	mgf.Initialize(f, lm, s);
+	double znew = -0.1e-3;
+	mgf.AddZTable(znew, 0);
+	std::set<int> ids;
+	for (auto &kv : mgf.z_to_idx) ids.insert(kv.second);
+	t.check(ids.size() == mgf.z_to_idx.size(), "z-node ids unique (" + std::to_string(ids.size()) + " of " + std::to_string(mgf.z_to_idx.size()) + ")");
+	// Table entry used for (z = znew, zp = a node of the last layer) equals a direct integration.
+	double zp = mgf.lm.z_nodes[4][1];
+	mgf.SetLayers(4, 0);
+	std::array<C, 9> G;
+	C phi;
+	mgf.ComputeMGF(2e-3, 0.0, znew, zp, G, phi);
+	std::array<C, 5> direct;
+	mgf.smgf.SetLayers(4, 0);
+	mgf.ComputeMGF_Integration(2e-3, znew, zp, direct);
+	t.check(rel(G[0], direct[0]) < 1e-9 && rel(phi, direct[4]) < 1e-9, "row for (znew, zp) holds that pair: Gxx " + fmt(G[0]) + " vs " + fmt(direct[0]));
+}, 600);
+
+Reg in_curl_sync("IN-curl-table-sync", "adaptive rho refinement keeps the curl table in sync", [](T &t) {
+	const double f = 10e9;
+	LayerManager lm = two_layer(f);
+	std::vector<double> rho = {1e-3, 2e-3, 3e-3, 4e-3, 5e-3};
+	MGF mgf = interp_engine(lm, f, {0.5e-3}, rho, true);
+	mgf.AddRhoTable(4.5e-3);
+	t.check(mgf.MGF_table[0].size() == mgf.lm.rho_nodes.size(), "MGF table has one column per rho node");
+	t.check(mgf.CurlMGF_table[0].size() == mgf.lm.rho_nodes.size(), "curl table has one column per rho node (" +
+	        std::to_string(mgf.CurlMGF_table[0].size()) + " vs " + std::to_string(mgf.lm.rho_nodes.size()) + ")");
+}, 600);
+
+Reg in_curl_z("IN-curl-interpolate-z", "ComputeCurlMGF honours interpolate_z", [](T &t) {
+	const double f = 10e9;
+	LayerManager lm;
+	lm.AddLayer(0.0, 1e-3, {4.0, 0.0}, 1.0, 0.0, 0.0);
+	lm.SetHalfspaces(1.0, 1.0, 0.0, 1.0, 1.0, 0.0, false, true);
+	lm.ProcessLayers(f);
+	std::vector<double> rho = {1e-3, 2e-3, 3e-3, 4e-3};
+	MGF mgf = interp_engine(lm, f, {0.2e-3, 0.8e-3}, rho, true, true, 1, 1);
+	mgf.SetLayers(0, 0);
+	std::array<C, 9> a, b, mid;
+	mgf.ComputeCurlMGF(2e-3, 0.0, 0.2e-3, 0.2e-3, a);
+	mgf.ComputeCurlMGF(2e-3, 0.0, 0.8e-3, 0.2e-3, b);
+	mgf.ComputeCurlMGF(2e-3, 0.0, 0.5e-3, 0.2e-3, mid);
+	double e = 0;
+	for (int n = 0; n < 9; ++n)
+		if (std::abs(a[n]) + std::abs(b[n]) > 0) e = std::max(e, std::abs(mid[n] - 0.5*(a[n] + b[n]))/std::max(std::abs(a[n]), std::abs(b[n])));
+	t.check(e < 1e-12, "midpoint equals the linear interpolation of the two nodes (dev " + fmt(e, 3) + ")");
+}, 600);
+
+Reg in_updatez("IN-update-z-empty-layer", "adaptive z refinement with a layer that has no z-nodes", [](T &t) {
+	const double f = 10e9;
+	LayerManager lm = two_layer(f);
+	lm.z_nodes.assign(lm.layers.size(), {});
+	lm.z_nodes[0] = {0.2e-3, 0.5e-3, 0.8e-3};
+	std::vector<double> rho = {1e-3, 2e-3, 3e-3};
+	lm.InsertNodes_rho(rho);
+	MGF mgf;
+	MGF_settings s = quiet(MGF_INTERPOLATE);
+	s.interpolate_z = true;
+	s.update_z_nodes = true;
+	s.order = 1;
+	s.order_z = 1;
+	s.adaptive_threshold = 1e30;
+	mgf.Initialize(f, lm, s);
+	bool ok = true;
+	try { mgf.AdaptiveInterpolation(); }
+	catch (const std::exception &) { ok = true; }
+	t.check(ok, "AdaptiveInterpolation returns");
+}, 300);
+
+// ================================================================================================
+// Floating-point hygiene
+// ================================================================================================
+
+Reg fe_flags("FE-halfspace", "half-space spectral kernels do not raise FE_INVALID / FE_OVERFLOW", [](T &t) {
+	LayerManager lm = two_layer();
+	struct Cfg { int i, m; double zp, z; C kr; };
+	for (Cfg c : {Cfg{0, -1, 0.5e-3, 2e-3, C(0.0, 5.0)}, Cfg{0, -1, 0.5e-3, 1.0, C(1e4, 0.0)}, Cfg{0, 2, 0.5e-3, -1.0, C(1e4, 0.0)},
+	              Cfg{-1, -1, 1.0, 1.1, C(80.0, 0.0)}, Cfg{2, 2, -2e-3, -3e-3, C(80.0, 0.0)}})
+	{
+		SpectralMGF s;
+		setup_spec(s, lm, c.i, c.m, c.zp, c.z, c.kr);
+		std::feclearexcept(FE_ALL_EXCEPT);
+		s.ComputeSpectralMGF();
+		bool inv = std::fetestexcept(FE_INVALID), ovf = std::fetestexcept(FE_OVERFLOW);
+		bool finite = true;
+		for (int n = 0; n < 5; ++n) finite = finite && std::isfinite(std::abs(s.GetResult(n)));
+		t.check(!inv && !ovf && finite, "i=" + std::to_string(c.i) + " m=" + std::to_string(c.m) + " krho=" + fmt(c.kr) +
+		        ": FE_INVALID=" + std::to_string(inv) + " FE_OVERFLOW=" + std::to_string(ovf) + " finite=" + std::to_string(finite));
+	}
+});
+
+} // namespace
+
+
+int main(int argc, char **argv)
+{
+	std::string filter = argc > 1 ? argv[1] : "";
+	int failed = 0, run = 0;
+	for (const auto &c : registry())
+	{
+		if (!filter.empty() && c.id.find(filter) == std::string::npos)
+			continue;
+		++run;
+		int fd[2];
+		if (pipe(fd) != 0) { perror("pipe"); return 255; }
+		std::cout.flush();
+		pid_t pid = fork();
+		if (pid == 0)
+		{
+			close(fd[0]);
+			alarm(c.timeout);
+			T t;
+			std::string status;
+			try
+			{
+				c.fn(t);
+			}
+			catch (const std::exception &e)
+			{
+				t.check(false, std::string("unexpected exception: ") + e.what());
+			}
+			std::string out = (t.ok ? "PASS" : "FAIL") + std::string("\n") + t.log.str();
+			ssize_t w = write(fd[1], out.data(), out.size());
+			(void)w;
+			close(fd[1]);
+			_exit(t.ok ? 0 : 1);
+		}
+		close(fd[1]);
+		std::string out;
+		char buf[4096];
+		ssize_t r;
+		while ((r = read(fd[0], buf, sizeof(buf))) > 0) out.append(buf, r);
+		close(fd[0]);
+		int st = 0;
+		waitpid(pid, &st, 0);
+		std::string verdict, details;
+		if (WIFSIGNALED(st))
+		{
+			int sig = WTERMSIG(st);
+			verdict = sig == SIGALRM ? "TIMEOUT" : "CRASH";
+			details = "      " + std::string(sig == SIGALRM ? "time limit " + std::to_string(c.timeout) + " s exceeded" : "signal " + std::to_string(sig) + " (" + strsignal(sig) + ")") + "\n";
+			auto nl = out.find('\n');
+			if (nl != std::string::npos) details += out.substr(nl + 1);
+		}
+		else
+		{
+			auto nl = out.find('\n');
+			verdict = out.substr(0, nl);
+			details = nl == std::string::npos ? "" : out.substr(nl + 1);
+			if (verdict.empty()) verdict = "CRASH";
+		}
+		if (verdict != "PASS") ++failed;
+		std::cout << "[" << verdict << "] " << c.id << "  " << c.title << "\n" << details << std::flush;
+	}
+	std::cout << "\n" << run - failed << " of " << run << " tests passed." << std::endl;
+	return std::min(failed, 255);
+}

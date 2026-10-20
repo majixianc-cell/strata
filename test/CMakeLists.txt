@@ -53,3 +53,13 @@ add_executable(testDjordjevicSarkar ${SRC_DIR}/testDjordjevicSarkar.cpp)
 target_include_directories(testDjordjevicSarkar PRIVATE ${INC_DIR} ${STRATA_INC})
 target_link_libraries(testDjordjevicSarkar PRIVATE strata)
 
+
+# ------ Audit test suite (test/audit) ------
+
+add_executable(strata_probe ${SRC_DIR}/audit/strata_probe.cpp)
+target_include_directories(strata_probe PRIVATE ${INC_DIR} ${STRATA_INC} ${BOOST_INC} ${AmosBessel_INC} ${YAML_INC})
+target_link_libraries(strata_probe PRIVATE strata ${AmosBessel_LIB} ${YAML_LIB})
+
+add_executable(strata_unit_tests ${SRC_DIR}/audit/unit_tests.cpp)
+target_include_directories(strata_unit_tests PRIVATE ${INC_DIR} ${STRATA_INC} ${BOOST_INC} ${AmosBessel_INC})
+target_link_libraries(strata_unit_tests PRIVATE strata ${AmosBessel_LIB})
