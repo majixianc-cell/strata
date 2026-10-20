@@ -226,7 +226,12 @@ void QuasistaticMGF::ComputeCurlQMGF_Spectral(double z, double zp, std::complex<
 	
 	// -------------------------------------------------------
 
-	if (z > zp)
+	// Direction of the observer relative to the source. Across layers it follows from the layer order (observer above
+	// the source layer: +1), which also holds for points on the common interface (z == zp); within one layer it is
+	// sign(z - zp), 0 on the source plane.
+	if (i != m)
+		P = (m < i) ? 1.0 : -1.0;
+	else if (z > zp)
 		P = 1.0;
 	else if (z < zp)
 		P = -1.0;
@@ -347,7 +352,12 @@ void QuasistaticMGF::ComputeCurlQMGF_Spatial(double z, double zp, double rho)
 	
 	// -------------------------------------------------------
 
-	if (z > zp)
+	// Direction of the observer relative to the source. Across layers it follows from the layer order (observer above
+	// the source layer: +1), which also holds for points on the common interface (z == zp); within one layer it is
+	// sign(z - zp), 0 on the source plane.
+	if (i != m)
+		P = (m < i) ? 1.0 : -1.0;
+	else if (z > zp)
 		P = 1.0;
 	else if (z < zp)
 		P = -1.0;
@@ -2504,7 +2514,12 @@ void QuasistaticMGF::SwapSourceAndObserver(double &z, double &zp)
 	zp = z_old;
 	z = zp_old;
 
-	if (z > zp)
+	// Direction of the observer relative to the source. Across layers it follows from the layer order (observer above
+	// the source layer: +1), which also holds for points on the common interface (z == zp); within one layer it is
+	// sign(z - zp), 0 on the source plane.
+	if (i != m)
+		P = (m < i) ? 1.0 : -1.0;
+	else if (z > zp)
 		P = 1.0;
 	else if (z < zp)
 		P = -1.0;
