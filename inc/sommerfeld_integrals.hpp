@@ -181,11 +181,27 @@ inline std::complex<double> IntegrateSpectralFarField(SpectralMGF &smgf, double 
 			return SommerfeldIntegrand(smgf, rho, krho, component, order, curl);
 		};
 
-	// Use direct infinite-domain quadrature only when rho is nearly zero.
+	// On the axis the integrand does not oscillate, and a semi-infinite rule is used. A single mapped rule on
+	// [a, inf) only resolves features on the scale of a, however, while the integrand decays on the scale
+	// 1/|z - zp|, which on chip can be 1e4 times larger (8 % error for rho = 0 in a 6 um stack at 1 GHz). Panels whose
+	// widths start at a and double cover all scales; the semi-infinite rule is applied once they have become
+	// negligible.
 	if (rho < 1.0e-15)
 	{
 		std::complex<double> result = 0.0;
-		GaussKronrodBoost(f, a, std::numeric_limits<double>::infinity(), tol, result);
+		double left = a, width = (a > 0.0) ? a : 1.0;
+		for (int panel = 0, negligible = 0; panel < 200 && negligible < 3; panel++)
+		{
+			std::complex<double> part = 0.0;
+			GaussKronrodBoost(f, left, left + width, tol, part);
+			result += part;
+			negligible = (std::abs(part) <= tol*std::abs(result)) ? negligible + 1 : 0;
+			left += width;
+			width *= 2.0;
+		}
+		std::complex<double> tail = 0.0;
+		GaussKronrodBoost(f, left, std::numeric_limits<double>::infinity(), tol, tail);
+		result += tail;
 		CheckComplexResultForInfOrNaN(result, "the direct Gauss-Kronrod integration result");
 		return result;
 	};
