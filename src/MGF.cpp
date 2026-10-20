@@ -30,6 +30,7 @@
  *************************************************************************/
 
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <vector>
@@ -1224,8 +1225,8 @@ void MGF::ComputeMGF_Interpolation_withZ(double rho, double z, double zp, std::a
     std::vector<double> z_stencil;
     std::vector<double> zp_stencil;
 
-    GetStencilZ(z, z_idx_stencil, z_stencil);
-    GetStencilZ(zp, zp_idx_stencil, zp_stencil);
+    GetStencilZ(z, m, z_idx_stencil, z_stencil);
+    GetStencilZ(zp, i, zp_idx_stencil, zp_stencil);
 
     // Get interpolation points for rho
     std::vector<int> cols = GetColumns(rho);
@@ -1242,7 +1243,7 @@ void MGF::ComputeMGF_Interpolation_withZ(double rho, double z, double zp, std::a
 
                 // ====== Retrive the images at the above index pair ======
 
-                int idx_row = idxpair_to_row[std::make_pair(z_idx_stencil[jj], zp_idx_stencil[kk])];
+                int idx_row = idxpair_to_row.at(std::make_pair(z_idx_stencil[jj], zp_idx_stencil[kk]));
 
                 for (int tt = 0; tt < cols.size(); tt++)
                 {
@@ -1937,76 +1938,38 @@ int MGF::GetRow(double z, double zp)
 		throw std::logic_error("[ERROR] MGF:GetRow(): Table has not been generated. Call MGF::Initialize() first.");
 	}
 
+	// Nearest tabulated z-node of the observation layer m to z, and of the source layer i to zp. The search is
+	// restricted to the nodes of that layer: the former map search could pick a node of a neighbouring layer, and
+	// for a point below the first node of the map it decremented begin().
+	int idx_z = z_to_idx.at({m, NearestNodeZ(m, z)});
+	int idx_zp = z_to_idx.at({i, NearestNodeZ(i, zp)});
 
-	// ====== Locate the index of the z-node nearest to z using observe layer ======
-	auto z_below = z_to_idx.lower_bound({m, z});
-	auto z_above = z_to_idx.upper_bound({m, z});
+	auto found = idxpair_to_row.find(std::make_pair(idx_z, idx_zp));
+	if (found == idxpair_to_row.end())
+		throw std::logic_error("[ERROR] MGF::GetRow(): No table row for the requested z-node pair.");
 
-	int idx_z;
-	double z_found;
-
-	if (std::abs(z - z_below->first.second) < 1.0e-15)
-	{
-		idx_z = z_below->second;
-		z_found = z_below->first.second;
-	}
-	else
-	{
-		z_below--;
-
-		if (std::abs(z - z_below->first.second) < std::abs(z - z_above->first.second))
-		{
-			idx_z = z_below->second;
-			z_found = z_below->first.second;
-		}
-		else
-		{
-			idx_z = z_above->second;
-			z_found = z_above->first.second;
-		}
-	}
-
-
-	// ====== Locate the index of the z-node nearest to zp using source layer  ======
-
-	auto zp_below = z_to_idx.lower_bound({i, zp});
-	auto zp_above = z_to_idx.upper_bound({i, zp});
-
-	int idx_zp;
-	double zp_found;
-
-	if (std::abs(zp - zp_below->first.second) < 1.0e-15)
-	{
-		idx_zp = zp_below->second;
-		zp_found = zp_below->first.second;
-	}
-	else
-	{
-		zp_below--;
-
-		if (std::abs(zp - zp_below->first.second) < std::abs(zp - zp_above->first.second))
-		{
-			idx_zp = zp_below->second;
-			zp_found = zp_below->first.second;
-		}
-		else
-		{
-			idx_zp = zp_above->second;
-			zp_found = zp_above->first.second;
-		}
-	}
-	
-
-	// ====== Retrive the images at the above index pair ======
-
-	int idx_row = idxpair_to_row[std::make_pair(idx_z, idx_zp)];
-
-	return idx_row;
+	return found->second;
 
 }
 
+
+/*! \brief Tabulated z-node of the given layer that is nearest to z (points beyond the end nodes map to them).*/
+double MGF::NearestNodeZ(int layer, double z)
+{
+	if (layer < 0 || layer >= (int)lm.z_nodes.size() || lm.z_nodes[layer].empty())
+		throw std::out_of_range("[ERROR] MGF::NearestNodeZ(): No z-nodes were tabulated in layer " + std::to_string(layer) + ".");
+
+	const std::vector<double> &nodes = lm.z_nodes[layer];
+	int k = std::lower_bound(nodes.begin(), nodes.end(), z) - nodes.begin();
+	if (k == (int)nodes.size())
+		k--;
+	else if (k > 0 && z - nodes[k-1] < nodes[k] - z)
+		k--;
+	return nodes[k];
+}
+
 /*! \brief Function to retrieve the interpolation stencil for a given z and zp.*/
-void MGF::GetStencilZ(double z, std::vector<int> &z_idx_stencil, std::vector<double> &z_stencil)
+void MGF::GetStencilZ(double z, int layer_idx, std::vector<int> &z_idx_stencil, std::vector<double> &z_stencil)
 {
 
     if (!initialized)
@@ -2017,7 +1980,9 @@ void MGF::GetStencilZ(double z, std::vector<int> &z_idx_stencil, std::vector<dou
 
     // ====== Locate the index of the z-node nearest to z ======
 
-    int layer_idx = lm.FindLayer(z);
+    // The layer is the one set by SetLayers(), not FindLayer(z): on an interface the two can differ.
+    if (layer_idx < 0 || layer_idx >= (int)lm.z_nodes.size() || lm.z_nodes[layer_idx].empty())
+        throw std::out_of_range("[ERROR] MGF::GetStencilZ(): No z-nodes were tabulated in layer " + std::to_string(layer_idx) + ".");
 
     std::vector<double> nodes = lm.z_nodes[layer_idx];
 
@@ -2058,7 +2023,7 @@ void MGF::GetStencilZ(double z, std::vector<int> &z_idx_stencil, std::vector<dou
 
     for (int i = 0; i < z_stencil.size(); i++)
     {
-        z_idx_stencil.push_back(z_to_idx[{layer_idx, z_stencil[i]}]);
+        z_idx_stencil.push_back(z_to_idx.at({layer_idx, z_stencil[i]}));
     }
 
 
@@ -2074,56 +2039,32 @@ std::vector<int> MGF::GetColumns(double rho)
 		throw std::logic_error("[ERROR] MGF:GetColumns(): Table has not been generated. Call MGF::Initialize() first.");
 	}
 
-	std::vector<int> rho_stencil (s.order+1);
-	
+	const std::vector<double> &nodes = lm.rho_nodes;
+	int n = nodes.size();
+	if (n < 1)
+		throw std::logic_error("[ERROR] MGF::GetColumns(): No rho-nodes were tabulated.");
 
-	// ====== Locate the index of the rho-node nearest to rho ======
+	// Points outside the table are refused (a rounding error is accepted): the former map search dereferenced end()
+	// for rho beyond the last node and decremented begin() below the first one.
+	double tol = 1.0e-9*std::max({std::abs(nodes.front()), std::abs(nodes.back()), nodes.back() - nodes.front()});
+	if (rho < nodes.front() - tol || rho > nodes.back() + tol)
+		throw std::out_of_range("[ERROR] MGF::GetColumns(): rho = " + std::to_string(rho) + " lies outside the tabulated range [" +
+		                        std::to_string(nodes.front()) + ", " + std::to_string(nodes.back()) + "].");
 
-	std::map<double, int>::iterator rho_below = rho_to_idx.lower_bound(rho);
-	std::map<double, int>::iterator rho_above = rho_to_idx.upper_bound(rho);
-	std::map<double, int>::iterator rho_it;
+	// Nearest node, then a stencil of order+1 nodes (fewer if the table is smaller) around it
+	int idx_rho = std::lower_bound(nodes.begin(), nodes.end(), rho) - nodes.begin();
+	if (idx_rho == n)
+		idx_rho--;
+	else if (idx_rho > 0 && rho - nodes[idx_rho-1] < nodes[idx_rho] - rho)
+		idx_rho--;
 
-	if (std::abs(rho - rho_below->first) < 1.0e-15)
-		rho_it = rho_below;
-	else
-	{
-		rho_below--;
-	
-		if (std::abs(rho - rho_below->first) < std::abs(rho - rho_above->first))
-			rho_it = rho_below;
-		else
-			rho_it = rho_above;
-	}
+	int width = std::min(s.order + 1, n);
+	int idx_start = std::max(idx_rho - s.order/2, 0);
+	idx_start = std::min(idx_start, n - width);
 
-	int idx_rho = std::distance(rho_to_idx.begin(), rho_it);
-
-	int idx_start = std::max((idx_rho - s.order/2), 0);
-	if (idx_start + s.order > rho_to_idx.size() - 1)
-		idx_start = rho_to_idx.size() - s.order - 1;
-
-	int start_dist = idx_rho - idx_start;
-	std::advance(rho_it, -start_dist);
-	
-	for (int ii = idx_start, jj = 0; ii <= idx_start + s.order; ii++, jj++)
-	{
-		rho_stencil[jj] = rho_it->second;
-		rho_it++;
-	}
-
-	// ====== Debugging ======
-
-	// std::cout << rho_it->first << ", " << idx_rho << ", " << idx_start << ", " << start_dist << std::endl;
-
-	// std::cout << rho << ", [ " << std::flush;
-	// for (int ii = 0; ii < rho_stencil.size(); ii++)
-	// 	std::cout << lm.rho_nodes[rho_stencil[ii]] << " " << std::flush;
-	// std::cout << "]" << std::endl;
-
-	// std::ofstream print_rho ("./test/benchmarks/MGF_layers/test_rho.debug", std::ios_base::app);
-	// print_rho << rho << ", [ " << std::flush;
-	// for (int ii = 0; ii < rho_stencil.size(); ii++)
-	// 	print_rho << lm.rho_nodes[rho_stencil[ii]] << " " << std::flush;
-	// print_rho << "]" << std::endl;
+	std::vector<int> rho_stencil (width);
+	for (int jj = 0; jj < width; jj++)
+		rho_stencil[jj] = idx_start + jj;
 
 	return rho_stencil;
 
