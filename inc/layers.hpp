@@ -146,6 +146,7 @@ public:
 
 	bool layers_processed = false;
 	double processed_frequency = -1.0;     /// Frequency of the last ProcessLayers() call
+	std::vector<int> merged_index;         /// For each layer before the last MergeLayersWithSameMaterial() (numbered from the top), its index after it
 	std::vector<Layer> layers;
 	std::vector<std::complex<double>> k;    /// Complex wave number of each layer
 	std::vector<std::complex<double>> eps;  /// Complex permittivity of each layer

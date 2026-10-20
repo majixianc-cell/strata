@@ -166,6 +166,21 @@ Reg lm_merge("LM-merge", "identical adjacent layers are merged, different ones a
 	t.check(d.layers.size() == 2, "different epsr_im stays separate");
 });
 
+Reg lm_merge_index("LM-merge-index", "merging reports the new index of every layer", [](T &t) {
+	LayerManager a;
+	a.AddLayer(1e-3, 2e-3, {2.0, 0.0}, 1.0, 0.0, 0.0);
+	a.AddLayer(0.0, 1e-3, {4.0, 0.0}, 1.0, 0.0, 0.0);
+	a.AddLayer(-1e-3, 0.0, {4.0, 0.0}, 1.0, 0.0, 0.0);
+	a.AddLayer(-2e-3, -1e-3, {9.0, 0.0}, 1.0, 0.0, 0.0);
+	a.ProcessLayers(1e9);
+	std::vector<int> expected = {0, 1, 1, 2};
+	std::string got;
+	for (int v : a.merged_index) got += std::to_string(v) + " ";
+	t.check(a.layers.size() == 3 && a.merged_index == expected, "layers 0..3 -> 0 1 1 2 (got " + got + ")");
+	a.ProcessLayers(2e9);
+	t.check(a.merged_index == std::vector<int>({0, 1, 2}), "a second ProcessLayers() leaves the merged stack as it is");
+});
+
 Reg lm_find("LM-findlayer", "FindLayer at the top surface, interfaces and outside the stack", [](T &t) {
 	LayerManager lm;
 	lm.AddLayer(0.0, 1.0, {2.0, 0.0}, 1.0, 0.0, 0.0);

@@ -1065,6 +1065,23 @@ void LayerManager::MergeLayersWithSameMaterial(double tol)
 		z_nodes = new_nodes;
 	}
 
+	// Merging renumbers the layers: indices taken from the list as it was added (for SetLayers(), for instance) then
+	// point to other layers. Record the new index of every old layer and say so once.
+	merged_index.assign(layers.size(), 0);
+	for (int ii = 0; ii < to_be_combined.size(); ii++)
+		for (int idx : to_be_combined[ii])
+			merged_index[idx] = ii;
+	if (to_be_combined.size() != layers.size())
+	{
+		static bool noticed = false;
+		if (!noticed)
+			std::cerr << "[NOTICE] LayerManager::ProcessLayers(): " << layers.size() - to_be_combined.size()
+			          << " adjacent layer(s) of identical material were merged into their neighbours, so layer indices refer "
+			          << "to the merged stack-up (see LayerManager::merged_index, or use FindLayer()). This notice is shown "
+			          << "once." << std::endl;
+		noticed = true;
+	}
+
 	// Update the final list of layers
 	layers.clear();
 	layers = new_layers;
