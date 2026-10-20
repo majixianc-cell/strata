@@ -839,6 +839,207 @@ Reg fe_flags("FE-halfspace", "half-space spectral kernels do not raise FE_INVALI
 	}
 });
 
+// ================================================================================================
+// Further checks (including findings of the Codex review of the same revision)
+// ================================================================================================
+
+// Strata's curl in a homogeneous medium (G_HJ = G_EM in Strata's sign convention, the negative of the H-field kernel):
+// scalars G1 = 2 dz (1 + jkR) e^{-jkR}/(4 pi R^3), G2 = G3 = rho (1 + jkR) e^{-jkR}/(4 pi R^3), G0 = 0.
+std::array<C, 9> homogeneous_curl(C k, double x, double y, double dz)
+{
+	double rho = std::hypot(x, y), R = std::sqrt(rho*rho + dz*dz), phi = std::atan2(y, x);
+	C g = (1.0 + strata::J*k*R)*std::exp(-strata::J*k*R)/(4.0*M_PI*std::pow(R, 3));
+	C G1 = 2.0*dz*g, G2 = rho*g, G3 = rho*g;
+	return {0.0, -G1/2.0, G2*std::sin(phi), G1/2.0, 0.0, -G2*std::cos(phi), -G3*std::sin(phi), G3*std::cos(phi), 0.0};
+}
+
+Reg ex_curl("EX-curl-homogeneous", "curl in a homogeneous medium with and without extraction", [](T &t) {
+	const double f = 2e9;
+	LayerManager lm = homogeneous(3.0, 1.5, 0.0, -0.02, 0.02, f);
+	for (int variant = 0; variant < 3; ++variant)
+		for (int ghj = 0; ghj < 2; ++ghj)
+		{
+			MGF mgf;
+			MGF_settings s = quiet(MGF_INTEGRATE);
+			s.compute_curl = true;
+			s.curl_type = ghj ? MGF_GHJ : MGF_GEM;
+			s.extract_quasistatic = (variant == 1);
+			s.extract_homogeneous = (variant == 2);
+			mgf.Initialize(f, lm, s);
+			mgf.SetLayers(0, 0);
+			std::array<C, 9> G;
+			double x = 3e-3, y = 2e-3, z = 1e-3, zp = -2e-3;
+			mgf.ComputeCurlMGF(x, y, z, zp, G);
+			auto ref = homogeneous_curl(mgf.lm.k[0], x, y, z - zp);
+			double scale = 0, err = 0;
+			for (int n = 0; n < 9; ++n) scale = std::max(scale, std::abs(ref[n]));
+			for (int n = 0; n < 9; ++n) err = std::max(err, std::abs(G[n] - ref[n])/scale);
+			std::string name = std::string(variant == 0 ? "plain" : variant == 1 ? "extract_quasistatic" : "extract_homogeneous") + (ghj ? " G_HJ" : " G_EM");
+			t.check(err < 1e-6, name + ": max rel error " + fmt(err, 3));
+		}
+}, 300);
+
+Reg ex_mask("EX-components-quasistatic", "SetComponents() with extract_quasistatic keeps the enabled components exact", [](T &t) {
+	const double f = 1e9;
+	LayerManager lm = two_layer(f);
+	MGF mgf;
+	MGF_settings s = quiet(MGF_INTEGRATE);
+	s.extract_quasistatic = true;
+	mgf.Initialize(f, lm, s);
+	mgf.SetLayers(0, 0);
+	std::array<C, 9> ref, G;
+	C pref, p;
+	mgf.ComputeMGF(1e-3, 0.5e-3, 0.7e-3, 0.3e-3, ref, pref);
+	mgf.SetComponents({1, 0, 1, 0, 1});
+	mgf.ComputeMGF(1e-3, 0.5e-3, 0.7e-3, 0.3e-3, G, p);
+	t.check(rel(G[0], ref[0]) < 1e-9 && rel(G[6], ref[6]) < 1e-9 && rel(p, pref) < 1e-9,
+	        "mask {1,0,1,0,1}: Gxx " + fmt(rel(G[0], ref[0]), 3) + " Gzx " + fmt(rel(G[6], ref[6]), 3) + " Gphi " + fmt(rel(p, pref), 3));
+	mgf.SetComponents({1, 1, 1, 1, 1});
+	mgf.ComputeMGF(1e-3, 0.5e-3, 0.7e-3, 0.3e-3, G, p);
+	double e = 0;
+	for (int n : {0, 2, 6, 8}) e = std::max(e, rel(G[n], ref[n]));
+	e = std::max(e, rel(p, pref));
+	t.check(e < 1e-9, "all components re-enabled: max rel " + fmt(e, 3));
+}, 300);
+
+Reg sp_reinit("SP-reinit-curl-type", "SpectralMGF::Initialize() keeps the nested quasistatic engine's curl type", [](T &t) {
+	LayerManager lm = two_layer();
+	const C kr(80.0, 10.0);
+	SpectralMGF a, b;
+	a.Initialize(&lm, 1e9, {1, 1, 1, 1, 1}, true);
+	a.SetCurlToGHJ();
+	b.SetCurlToGHJ();
+	b.Initialize(&lm, 1e9, {1, 1, 1, 1, 1}, true);
+	for (SpectralMGF *x : {&a, &b})
+	{
+		x->SetLayers(0, 0);
+		x->SetSourcePoint(0.3e-3);
+		x->SetObservationPoint(0.7e-3);
+		x->SetRadialWaveNumber(kr);
+		x->ComputeCurlSpectralMGF();
+	}
+	double e = 0;
+	for (int n = 0; n < 4; ++n) e = std::max(e, rel(b.GetResultCurl(n), a.GetResultCurl(n)));
+	t.check(e < 1e-12, "curl type set before Initialize(): max rel " + fmt(e, 3));
+});
+
+Reg lm_sigmamu("LM-sigmamu", "the magnetic conductivity sigmamu enters the permeability", [](T &t) {
+	LayerManager lm;
+	lm.AddLayer(0.0, 1e-3, {4.0, 0.0}, 2.0, 0.0, 100.0);
+	lm.ProcessLayers(1e9);
+	double expected = -100.0/(2.0*M_PI*1e9);
+	t.check(std::abs(lm.mu[0].imag() - expected) < 1e-12*std::abs(expected) && std::abs(lm.mu[0].real() - 2.0*strata::mu0) < 1e-20,
+	        "mu = " + fmt(lm.mu[0], 8) + ", expected imaginary part " + fmt(expected, 8));
+});
+
+Reg lm_ds("LM-ds-dc-permittivity", "relative_permittivity_at_dc of the Djordjevic-Sarkar model is honoured", [](T &t) {
+	std::vector<double> eps_low;
+	for (double dc : {-1.0, 4.8, 6.0})
+	{
+		DjordjevicSarkarParams ds;
+		ds.relative_permittivity = 4.4;
+		ds.loss_tangent = 0.02;
+		ds.at_frequency = 1e9;
+		ds.relative_permittivity_at_dc = dc;
+		LayerManager lm;
+		lm.AddLayer(0.0, 1e-3, {4.4, 0.0}, 1.0, 0.0, 0.0, DielectricModelType::DJORDJEVIC_SARKAR, ds);
+		lm.ProcessLayers(1e9);
+		C e = lm.eps[0]/strata::eps0;
+		t.check(std::abs(e.real() - 4.4) < 1e-9 && std::abs(-e.imag()/e.real() - 0.02) < 1e-9,
+		        "dc=" + fmt(dc) + ": anchors at 1 GHz kept (" + fmt(e, 8) + ")");
+		lm.ProcessLayers(1e-3);
+		eps_low.push_back((lm.eps[0]/strata::eps0).real());
+		if (dc > 0)
+			t.check(std::abs(eps_low.back() - dc) < 1e-3*dc, "dc=" + fmt(dc) + ": eps(1 mHz) = " + fmt(eps_low.back(), 8));
+	}
+	t.check(std::abs(eps_low[1] - eps_low[2]) > 0.5, "different DC permittivities give different models");
+});
+
+Reg lm_stale("LM-stale-frequency", "low-level engines refuse layer data processed at another frequency", [](T &t) {
+	LayerManager lm = two_layer(1e9);
+	bool thrown = false;
+	try { SpectralMGF s; s.Initialize(&lm, 2e9); }
+	catch (const std::logic_error &) { thrown = true; }
+	t.check(thrown, "SpectralMGF::Initialize at 2 GHz with layers processed at 1 GHz");
+	thrown = false;
+	try { QuasistaticMGF q; q.Initialize(&lm, 2e9); }
+	catch (const std::logic_error &) { thrown = true; }
+	t.check(thrown, "QuasistaticMGF::Initialize likewise");
+	bool ok = true;
+	try { SpectralMGF s; s.Initialize(&lm, 1e9); }
+	catch (const std::exception &) { ok = false; }
+	t.check(ok, "same frequency accepted");
+});
+
+Reg in_file("IN-table-file", "a table file is only reused for the configuration it was written for", [](T &t) {
+	std::string file = "/tmp/strata_unit_table_" + std::to_string(getpid()) + ".bin";
+	std::vector<double> rho = {1e-3, 2e-3, 3e-3, 4e-3};
+	auto make = [&](double f, bool exp, bool load) {
+		LayerManager lm = two_layer(f);
+		std::vector<double> zn = {0.5e-3};
+		lm.InsertNodes_z(zn);
+		lm.InsertNodes_rho(rho);
+		MGF mgf;
+		MGF_settings s = quiet(MGF_INTERPOLATE);
+		s.order = 1;
+		s.filename = file;
+		s.export_table = exp;
+		s.load_table = load;
+		mgf.Initialize(f, lm, s);
+		mgf.SetLayers(0, 0);
+		std::array<C, 9> G;
+		C p;
+		mgf.ComputeMGF(2e-3, 0.0, 0.5e-3, 0.5e-3, G, p);
+		return G[0];
+	};
+	C g1 = make(1e9, true, false);
+	C g1_loaded = make(1e9, false, true);
+	C g2_fresh = make(3e9, false, false);
+	C g2_loaded = make(3e9, false, true);
+	std::remove(file.c_str());
+	t.check(rel(g1_loaded, g1) < 1e-14, "same configuration: table reused");
+	t.check(rel(g2_loaded, g2_fresh) < 1e-12 && rel(g2_loaded, g1) > 1e-3, "other frequency: table regenerated (" + fmt(g2_loaded) + " vs " + fmt(g2_fresh) + ")");
+}, 300);
+
+Reg in_curl_missing("IN-curl-not-generated", "ComputeCurlMGF with interpolation but compute_curl=false fails cleanly", [](T &t) {
+	const double f = 10e9;
+	LayerManager lm = two_layer(f);
+	std::vector<double> rho = {1e-3, 2e-3, 3e-3, 4e-3};
+	MGF mgf = interp_engine(lm, f, {0.5e-3}, rho, false);
+	mgf.SetLayers(0, 0);
+	std::array<C, 9> G;
+	bool thrown = false;
+	try { mgf.ComputeCurlMGF(2e-3, 0.0, 0.5e-3, 0.5e-3, G); }
+	catch (const std::logic_error &) { thrown = true; }
+	t.check(thrown, "logic_error instead of reading an empty table");
+}, 120);
+
+Reg qs_hs("QS-halfspace-finite", "quasistatic terms with the source in a half-space are finite", [](T &t) {
+	LayerManager lm = two_layer();
+	QuasistaticMGF q;
+	q.Initialize(&lm, 1e9);
+	for (int src : {-1, 2})
+		for (int obs : {src, 0, 1})
+		{
+			q.SetLayers(src, obs);
+			double zp = src == -1 ? 2e-3 : -2e-3;
+			double z = obs == src ? (src == -1 ? 3e-3 : -3e-3) : (obs == 0 ? 0.5e-3 : -0.5e-3);
+			bool finite = true;
+			for (C kr : {C(0.0, 5.0), C(30.0, 0.0), C(1e4, 0.0)})
+			{
+				q.ComputeQMGF_Spectral(z, zp, kr);
+				for (int n = 0; n < 5; ++n) finite = finite && std::isfinite(std::abs(q.GetResult_Spectral(n)));
+				q.ComputeCurlQMGF_Spectral(z, zp, kr);
+				for (int n = 0; n < 4; ++n) finite = finite && std::isfinite(std::abs(q.GetResultCurl_Spectral(n)));
+			}
+			q.ComputeQMGF_Spatial(z, zp, 1e-3);
+			for (int n = 0; n < 5; ++n) finite = finite && std::isfinite(std::abs(q.GetResult_Spatial(n)));
+			q.ComputeCurlQMGF_Spatial(z, zp, 1e-3);
+			for (int n = 0; n < 4; ++n) finite = finite && std::isfinite(std::abs(q.GetResultCurl_Spatial(n)));
+			t.check(finite, "source layer " + std::to_string(src) + ", observation layer " + std::to_string(obs));
+		}
+});
+
 } // namespace
 
 
