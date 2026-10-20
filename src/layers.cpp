@@ -112,7 +112,9 @@ void LayerManager::ProcessTechFile_yaml(std::string tech_file, double units)
 		{
 
 			std::string label = it->first.as<std::string> ();
-			const YAML::Node &layer = it->second;
+			// A copy (a cheap handle): the iterator's operator-> returns a temporary proxy, and a reference to its member
+			// dangled after this statement (AddressSanitizer: stack-use-after-scope in every later layer[...]).
+			const YAML::Node layer = it->second;
 
 			double zmin = layer["zmin"].as<double> ();
 			double h = layer["h"].as<double> ();
