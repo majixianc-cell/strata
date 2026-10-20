@@ -51,6 +51,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 
@@ -204,69 +205,31 @@ std::vector<DCIM_images>& DCIM::GetImages(double z, double zp, bool curl_mode)
 	}
 
 
-	// ====== Locate the index of the z-node nearest to z ======
+	// ====== Locate the z-nodes nearest to z and zp ======
 
-	std::map<double, int>::iterator z_below = z_to_idx.lower_bound(z);
-	std::map<double, int>::iterator z_above = z_to_idx.upper_bound(z);
-
-	int idx_z;
-	double z_found;
-
-	if (std::abs(z - z_below->first) < 1.0e-15)
-	{
-		idx_z = z_below->second;
-		z_found = z_below->first;
-	}
-	else
-	{
-		z_below--;
-	
-		if (std::abs(z - z_below->first) < std::abs(z - z_above->first))
+	// The nearest node is searched in the whole (sorted) node map; points beyond the first or last node map to that
+	// node. (The former search dereferenced end() or decremented begin() for such points.)
+	auto nearest = [](const std::map<double, int> &nodes, double x) -> int
 		{
-			idx_z = z_below->second;
-			z_found = z_below->first;
-		}
-		else
-		{
-			idx_z = z_above->second;
-			z_found = z_above->first;
-		}
-	}
+			auto above = nodes.lower_bound(x);
+			if (above == nodes.end())
+				return std::prev(above)->second;
+			if (above == nodes.begin() || above->first == x)
+				return above->second;
+			auto below = std::prev(above);
+			return (x - below->first < above->first - x) ? below->second : above->second;
+		};
 
+	int idx_z = nearest(z_to_idx, z);
+	int idx_zp = nearest(z_to_idx, zp);
 
-	// ====== Locate the index of the z-node nearest to zp ======
-
-	std::map<double, int>::iterator zp_below = z_to_idx.lower_bound(zp);
-	std::map<double, int>::iterator zp_above = z_to_idx.upper_bound(zp);
-
-	int idx_zp;
-	double zp_found;
-
-	if (std::abs(zp - zp_below->first) < 1.0e-15)
-	{
-		idx_zp = zp_below->second;
-		zp_found = zp_below->first;
-	}
-	else
-	{
-		zp_below--;
-	
-		if (std::abs(zp - zp_below->first) < std::abs(zp - zp_above->first))
-		{
-			idx_zp = zp_below->second;
-			zp_found = zp_below->first;
-		}
-		else
-		{
-			idx_zp = zp_above->second;
-			zp_found = zp_above->first;
-		}
-	}
-	
 
 	// ====== Retrive the images at the above index pair ======
 
-	int idx_image = idxpair_to_image[std::make_pair(idx_z, idx_zp)];
+	auto found = idxpair_to_image.find(std::make_pair(idx_z, idx_zp));
+	if (found == idxpair_to_image.end())
+		throw std::logic_error("[ERROR] DCIM:GetImages(): No images were generated for the nearest z-node pair.");
+	int idx_image = found->second;
 
 
 	// ====== Debugging ======
