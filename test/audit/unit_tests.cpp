@@ -492,6 +492,22 @@ LayerManager hi_eps_halfspace()
 	return lm;
 }
 
+Reg qd_branch("QD-halfspace-branch-point", "a half-space with the largest wave number is enclosed by the near-field path", [](T &t) {
+	// eps_r = 12 half-space below an eps_r = 4 layer: its branch point lay beyond the switching point 1.2 |k_max| on
+	// the real axis when k_max ignored the half-spaces (physics checks: 3.8e-5, curl 2.7e-4, and 8.4e-5 with extraction
+	// for a source in the half-space). The error is systematic (a tighter tolerance does not remove it), so the
+	// reference places the switching point well beyond the half-space's branch point.
+	MGF_settings s = quiet(MGF_INTEGRATE);
+	s.compute_curl = true;
+	s.curl_type = MGF_GHJ;
+	const double sp = 2.0*std::abs(hi_eps_halfspace().k_bot);
+	double e = max_deviation(hi_eps_halfspace, 10e9, s, 0.044968868701575425, 0.12e-3, 0.08e-3, sp);
+	t.check(e < 1e-6, "far point (rho = 45 mm), plain integration: max deviation " + fmt(e, 3));
+	s.extract_homogeneous = true;
+	e = max_deviation(hi_eps_halfspace, 10e9, s, 6e-5, 0.1e-3, -0.04e-3, sp);
+	t.check(e < 1e-6, "source in the half-space, extract_homogeneous: max deviation " + fmt(e, 3));
+}, 300);
+
 LayerManager thin_nm()
 {
 	LayerManager lm;

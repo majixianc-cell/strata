@@ -151,8 +151,8 @@ public:
 	std::vector<std::complex<double>> eps;  /// Complex permittivity of each layer
 	std::vector<std::complex<double>> mu;   /// Complex permeability of each layer
 
-	std::complex<double> k_min, k_max;      /// Smallest and largest wave numbers in the structure, including bounding half spaces
-	int idx_k_min, idx_k_max;               /// Layer indices of the layers that have the smallest and largest wave numbers
+	std::complex<double> k_min, k_max;      /// Smallest wave number of the layers (reference medium of the DCIM images); largest wave number of the layers and the non-PEC bounding half-spaces
+	int idx_k_min, idx_k_max;               /// Indices of the layers that have them (-1: top half-space, N: bottom half-space)
 	
 	// ------ Top and bottom halfspace properties ------
 	

@@ -551,17 +551,22 @@ void LayerManager::ProcessLayers(double f)
 	// 	idx_k_min = layers.size();
 	// }
 	
-	// if (std::abs(k_top) > std::abs(k_max))
-	// {
-	// 	k_max = k_top;
-	// 	idx_k_max = -1;
-	// }
-	
-	// if (std::abs(k_bot) > std::abs(k_max))
-	// {
-	// 	k_max = k_bot;
-	// 	idx_k_max = layers.size();
-	// }
+	// The bounding half-spaces count for k_max, as documented: the near-field path has to pass their branch points too.
+	// With a half-space of higher permittivity than every layer, the far-field integration started in front of its
+	// branch point on the real axis (3.8e-5 error, 2.7e-4 in the curl, for eps_r = 12 below an eps_r = 4 layer). A PEC
+	// half-space has no wave number. k_min remains the smallest wave number of the layers, the reference medium of the
+	// DCIM images.
+	if (!isPEC_top && std::abs(k_top) > std::abs(k_max))
+	{
+		k_max = k_top;
+		idx_k_max = -1;
+	}
+
+	if (!isPEC_bot && std::abs(k_bot) > std::abs(k_max))
+	{
+		k_max = k_bot;
+		idx_k_max = layers.size();
+	}
 
 	layers_processed = true;
 	processed_frequency = f;
