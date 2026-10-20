@@ -412,8 +412,38 @@ static std::complex<double> ComputeDjordjevicSarkar(const DjordjevicSarkarParams
 {
 
 	const double omega_ref = 2.0*M_PI*p.at_frequency;
-	const double omega1 = 2.0*M_PI*p.lower_frequency;
 	const double omega2 = 2.0*M_PI*p.upper_frequency;
+	double omega1 = 2.0*M_PI*p.lower_frequency;
+
+	// With a given DC permittivity eps_dc = eps_inf + delta_eps, the lower corner frequency is the remaining unknown
+	// (the parameter used to be parsed and then ignored). eps(0) = eps' - tand eps' (L - Re g)/Im g, with
+	// L = ln(omega2/omega1) and g = ln((omega2 + j omega_ref)/(omega1 + j omega_ref)), decreases monotonically from
+	// infinity to eps' as omega1 rises from 0 to omega2; it is solved for omega1 by bisection in log(omega1).
+	if (p.relative_permittivity_at_dc >= 0.0)
+	{
+		auto eps_dc_of = [&](double w1)
+		{
+			std::complex<double> g = std::log(std::complex<double>(omega2, omega_ref)/std::complex<double>(w1, omega_ref));
+			double L = std::log(omega2/w1);
+			return p.relative_permittivity - p.loss_tangent*p.relative_permittivity*(L - g.real())/g.imag();
+		};
+		double lo = std::log(omega2) - 60.0, hi = std::log(omega2) - 1.0e-9;
+		if (!(p.loss_tangent > 0.0) || !(p.relative_permittivity_at_dc > eps_dc_of(std::exp(hi))) ||
+		    !(p.relative_permittivity_at_dc < eps_dc_of(std::exp(lo))))
+			throw std::invalid_argument("[ERROR] ComputeDjordjevicSarkar(): relative_permittivity_at_dc = " +
+			                            std::to_string(p.relative_permittivity_at_dc) +
+			                            " cannot be matched by the Djordjevic-Sarkar model with the given permittivity, loss tangent and upper frequency (it must exceed the permittivity at the measurement frequency, and the loss tangent must be positive).");
+		for (int it = 0; it < 200; it++)
+		{
+			double mid = 0.5*(lo + hi);
+			if (eps_dc_of(std::exp(mid)) > p.relative_permittivity_at_dc)
+				lo = mid;
+			else
+				hi = mid;
+		}
+		omega1 = std::exp(0.5*(lo + hi));
+	}
+
 	const double ln_ratio = std::log(omega2/omega1);
 
 	// Log term of the D-S model evaluated at the measurement frequency
