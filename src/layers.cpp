@@ -488,7 +488,8 @@ void LayerManager::ProcessLayers(double f)
 			layers[ii].epsr = ComputeDjordjevicSarkar(layers[ii].ds_params, omega);
 
 		eps[ii] = epsilon_complex(eps0, layers[ii].epsr, layers[ii].sigma, omega);
-		mu[ii] = std::complex<double> ((layers[ii].mur * mu0), 0.0);
+		// Magnetic conductivity sigmamu (ohm/m) gives mu = mu0 mur - j sigmamu/omega (it was read but never used)
+		mu[ii] = std::complex<double> ((layers[ii].mur * mu0), (omega > 0.0) ? -layers[ii].sigmamu/omega : 0.0);
 
 		k[ii] = omega*std::sqrt(eps[ii]*mu[ii]);
 
