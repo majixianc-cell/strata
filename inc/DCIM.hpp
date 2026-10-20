@@ -145,7 +145,7 @@ class DCIM
 	{
 		return s.extract_quasistatic && (curl_mode ? component == 0 : (component == 1 || component == 2));
 	}
-	void RunGPOF(std::vector<std::complex<double>> &y, double dt, std::vector<std::complex<double>> &a, std::vector<std::complex<double>> &alpha, double tol_svd = 1.0e-4, double tol_eig = 1.0e-16, int max_num_images = -1);
+	void RunGPOF(std::vector<std::complex<double>> &y, double dt, std::vector<std::complex<double>> &a, std::vector<std::complex<double>> &alpha, double tol_svd = 1.0e-4, double tol_eig = 1.0e-16, int max_num_images = -1, double noise_floor = 0.0);
 
 
 	// ====== Storage ======

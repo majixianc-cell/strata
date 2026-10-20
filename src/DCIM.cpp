@@ -389,9 +389,19 @@ void DCIM::GenerateImages_TwoLevel(double z, double zp, std::vector<DCIM_images>
 		if (curl_mode ? !s.components_curl[ii] : !s.components[ii])
 			continue;
 
+		// Samples below 1e-10 of the component's largest sample on any path are rounding noise: with extract_quasistatic
+		// the remainder far from the real axis is nothing else. GPOF fitted exponentials to them whose continuation to
+		// the paths closer to the real axis grows like exp(|alpha| T) (three-level DCIM with extract_quasistatic gave
+		// G_phi = 2e98 in a thick lossless substrate). Such levels get no images.
+		double noise_floor = 0.0;
+		for (auto *K : {&K_path1, &K_path2})
+			for (const auto &v : (*K)[ii])
+				noise_floor = std::max(noise_floor, std::abs(v));
+		noise_floor *= 1.0e-10;
+
 		// Run GPOF on level 1 samples
 		std::vector<std::complex<double>> a, alpha;
-		RunGPOF(K_path1[ii], sp.t1[2] - sp.t1[1], a, alpha, s.tol_svd, s.tol_eig, s.max_num_images);
+		RunGPOF(K_path1[ii], sp.t1[2] - sp.t1[1], a, alpha, s.tol_svd, s.tol_eig, s.max_num_images, noise_floor);
 
 		// Modify coefficients to go from t-space to kz-space
 		for (int jj = 0; jj < a.size(); jj++)
@@ -416,7 +426,7 @@ void DCIM::GenerateImages_TwoLevel(double z, double zp, std::vector<DCIM_images>
 		// Run GPOF on the modified level 2 samples
 		a.clear();
 		alpha.clear();
-		RunGPOF(K_path2[ii], sp.t2[2] - sp.t2[1], a, alpha, s.tol_svd, s.tol_eig, s.max_num_images);
+		RunGPOF(K_path2[ii], sp.t2[2] - sp.t2[1], a, alpha, s.tol_svd, s.tol_eig, s.max_num_images, noise_floor);
 
 		// Modify coefficients to go from t-space to kz-space
 		for (int jj = 0; jj < a.size(); jj++)
@@ -703,9 +713,19 @@ void DCIM::GenerateImages_ThreeLevel(double z, double zp, std::vector<DCIM_image
 		if (curl_mode ? !s.components_curl[ii] : !s.components[ii])
 			continue;
 
+		// Samples below 1e-10 of the component's largest sample on any path are rounding noise: with extract_quasistatic
+		// the remainder far from the real axis is nothing else. GPOF fitted exponentials to them whose continuation to
+		// the paths closer to the real axis grows like exp(|alpha| T) (three-level DCIM with extract_quasistatic gave
+		// G_phi = 2e98 in a thick lossless substrate). Such levels get no images.
+		double noise_floor = 0.0;
+		for (auto *K : {&K_path1, &K_path2, &K_path3})
+			for (const auto &v : (*K)[ii])
+				noise_floor = std::max(noise_floor, std::abs(v));
+		noise_floor *= 1.0e-10;
+
 		// Run GPOF on level 1 samples
 		std::vector<std::complex<double>> a, alpha;
-		RunGPOF(K_path1[ii], sp.t1[2] - sp.t1[1], a, alpha, s.tol_svd, s.tol_eig, s.max_num_images);
+		RunGPOF(K_path1[ii], sp.t1[2] - sp.t1[1], a, alpha, s.tol_svd, s.tol_eig, s.max_num_images, noise_floor);
 
 		// Modify coefficients to go from t-space to kz-space
 		for (int jj = 0; jj < a.size(); jj++)
@@ -739,7 +759,7 @@ void DCIM::GenerateImages_ThreeLevel(double z, double zp, std::vector<DCIM_image
 		// Run GPOF on the modified level 2 samples
 		a.clear();
 		alpha.clear();
-		RunGPOF(K_path2[ii], sp.t2[2] - sp.t2[1], a, alpha, s.tol_svd, s.tol_eig, s.max_num_images);
+		RunGPOF(K_path2[ii], sp.t2[2] - sp.t2[1], a, alpha, s.tol_svd, s.tol_eig, s.max_num_images, noise_floor);
 
 		// Modify coefficients to go from t-space to kz-space
 		for (int jj = 0; jj < a.size(); jj++)
@@ -765,7 +785,7 @@ void DCIM::GenerateImages_ThreeLevel(double z, double zp, std::vector<DCIM_image
 		// Run GPOF on the modified level 3 samples
 		a.clear();
 		alpha.clear();
-		RunGPOF(K_path3[ii], sp.t3[2] - sp.t3[1], a, alpha, s.tol_svd, s.tol_eig, s.max_num_images);
+		RunGPOF(K_path3[ii], sp.t3[2] - sp.t3[1], a, alpha, s.tol_svd, s.tol_eig, s.max_num_images, noise_floor);
 
 		// Modify coefficients to go from t-space to kz-space
 		for (int jj = 0; jj < a.size(); jj++)
@@ -851,7 +871,7 @@ reduced M x M matrix Z = D_M^-1 U_M^H Y2 V_M is used, so that the leading dimens
 ComputeSVD() for any L (they did not for L > N/2), eigenvalues are ordered by magnitude before the tol_eig cut (LAPACK
 does not order them), and data without any nonzero singular value - e.g. a component that vanishes by symmetry -
 gives no images instead of dividing by zero singular values.*/
-void DCIM::RunGPOF(std::vector<std::complex<double>> &y, double dt, std::vector<std::complex<double>> &a, std::vector<std::complex<double>> &alpha, double tol_svd, double tol_eig, int max_num_images)
+void DCIM::RunGPOF(std::vector<std::complex<double>> &y, double dt, std::vector<std::complex<double>> &a, std::vector<std::complex<double>> &alpha, double tol_svd, double tol_eig, int max_num_images, double noise_floor)
 {
 
 	a.clear();
@@ -863,11 +883,11 @@ void DCIM::RunGPOF(std::vector<std::complex<double>> &y, double dt, std::vector<
 	if (N < 2 || L < 1 || L > N - 1)
 		throw std::invalid_argument("[ERROR] DCIM::RunGPOF(): The pencil parameter must lie between 1 and N-1 (got " + std::to_string(L) + " for N = " + std::to_string(N) + ").");
 
-	// Scale the data to unit magnitude; identically zero data has no images
+	// Scale the data to unit magnitude; identically zero data, and data at or below noise_floor, has no images
 	double ymax = 0.0;
 	for (const auto &v : y)
 		ymax = std::max(ymax, std::abs(v));
-	if (!(ymax > 0.0) || !std::isfinite(ymax))
+	if (!(ymax > std::max(noise_floor, 0.0)) || !std::isfinite(ymax))
 		return;
 
 	// Populate matrices Y1 and Y2 (column major, (N-L) x L) from the scaled data

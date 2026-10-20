@@ -895,6 +895,41 @@ Reg dc_qs("DC-quasistatic-levels", "DCIM with extract_quasistatic agrees with di
 		}
 }, 300);
 
+Reg dc_noise("DC-quasistatic-noise", "DCIM does not fit images to rounding noise", [](T &t) {
+	// Thick lossless substrate at 30 GHz: with extract_quasistatic the remainder on the outer DCIM path is rounding
+	// noise for the potentials, and the images fitted to it gave G_xx = inf and G_phi = 2e98.
+	const double f = 30e9, rho = 0.345e-3, z = 1.59e-3, zp = 1.31e-3;
+	auto run = [&](int method) {
+		LayerManager lm;
+		lm.AddLayer(1.1e-3, 1.8e-3, {2.1, 0.0}, 1.0, 0.0, 0.0);
+		lm.AddLayer(0.8e-3, 1.1e-3, {12.5, 0.0}, 1.0, 0.0, 0.0);
+		lm.AddLayer(0.3e-3, 0.8e-3, {9.8, 0.0}, 1.0, 0.0, 0.0);
+		lm.AddLayer(0.0, 0.3e-3, {8.6, 0.0}, 1.0, 0.0, 0.0);
+		lm.SetHalfspaces(1.0, 1.0, 0.0, 1.0, 1.0, 0.0, false, true);
+		lm.ProcessLayers(f);
+		std::vector<double> zn = {zp, z};
+		lm.InsertNodes_z(zn);
+		MGF mgf;
+		MGF_settings s = quiet(method);
+		s.DCIM_method = 3;
+		s.extract_quasistatic = (method == MGF_DCIM);
+		mgf.Initialize(f, lm, s);
+		mgf.SetLayers(0, 0);
+		std::array<C, 9> G;
+		C p;
+		mgf.ComputeMGF(rho*std::cos(0.3), rho*std::sin(0.3), z, zp, G, p);
+		std::array<C, 10> out;
+		for (int n = 0; n < 9; ++n) out[n] = G[n];
+		out[9] = p;
+		return out;
+	};
+	auto ref = run(MGF_INTEGRATE), d = run(MGF_DCIM);
+	double gs = std::max(std::abs(ref[0]), std::abs(ref[8])), e = std::abs(d[9] - ref[9])/std::abs(ref[9]);
+	for (int n = 0; n < 9; ++n) e = std::max(e, std::abs(d[n] - ref[n])/gs);
+	t.check(std::isfinite(e) && e < 1e-2, "three-level DCIM with extract_quasistatic: max deviation " + fmt(e, 3) +
+	        " (G_xx " + fmt(d[0]) + " vs " + fmt(ref[0]) + ")");
+}, 300);
+
 Reg dc_gpof("DC-gpof", "GPOF recovers exact exponentials for any pencil parameter", [](T &t) {
 	const int N = 100;
 	const double dt = 0.05;
