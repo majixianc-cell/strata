@@ -1398,6 +1398,9 @@ void SpectralMGF::ComputeCurlGHJmi(std::array<std::complex<double>, 4> &curlK)
 	VIh = GVh_mi;
 	IVe = GIe_mi;
 
+	// The currents computed below are stored in IIe/IIh, which the assembly reads (they used to be written to VVe/VVh,
+	// leaving IIe/IIh at whatever an earlier same-layer call had produced, or zero).
+
 	// For II, the m < i case is treated as the reciprocal to the m > i case. Note that this involves some redundant computations of reflection coefficients etc. and could probably be improved, but has a minimal impact on overall computational cost.
 
 	bool reciprocal = false;
@@ -1422,8 +1425,8 @@ void SpectralMGF::ComputeCurlGHJmi(std::array<std::complex<double>, 4> &curlK)
 		ComputeVIeii(_z, zp, VIeii);
 		ComputeVIhii(_z, zp, VIhii);
 
-		VVe = VIeii*TIe;
-		VVh = VIhii*TIh;
+		IIe = VIeii*TIe;
+		IIh = VIhii*TIh;
 
 	}
 	else
@@ -1436,8 +1439,8 @@ void SpectralMGF::ComputeCurlGHJmi(std::array<std::complex<double>, 4> &curlK)
 		ComputeVVeii(_z, zp, VVeii);
 		ComputeVVhii(_z, zp, VVhii);
 
-		VVe = -VVeii*TVe;
-		VVh = -VVhii*TVh;
+		IIe = -VVeii*TVe;
+		IIh = -VVhii*TVh;
 
 		// Reset
 		SwapSourceAndObserver();
@@ -1448,8 +1451,8 @@ void SpectralMGF::ComputeCurlGHJmi(std::array<std::complex<double>, 4> &curlK)
 	if (extract_homogeneous && !extract_quasistatic)
 	{
 		std::complex<double> exp_hom = std::exp(-jkzi*std::abs(z - zp));
-		VVe -= (P/2.0)*exp_hom;
-		VVh -= (P/2.0)*exp_hom;
+		IIe -= (P/2.0)*exp_hom;
+		IIh -= (P/2.0)*exp_hom;
 		IVe -= (omega*epsi/2.0/kzi)*exp_hom;
 		VIh -= (omega*mum/2.0/kzi)*exp_hom;
 	}
