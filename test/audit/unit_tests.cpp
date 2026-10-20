@@ -1019,10 +1019,12 @@ Reg lm_ds("LM-ds-dc-permittivity", "relative_permittivity_at_dc of the Djordjevi
 		C e = lm.eps[0]/strata::eps0;
 		t.check(std::abs(e.real() - 4.4) < 1e-9 && std::abs(-e.imag()/e.real() - 0.02) < 1e-9,
 		        "dc=" + fmt(dc) + ": anchors at 1 GHz kept (" + fmt(e, 8) + ")");
-		lm.ProcessLayers(1e-3);
+		// The lower corner frequency that reaches dc = 6 lies near 0.4 mHz (tan d = 0.02 gives about 0.056 per neper
+		// of frequency), so the DC limit is checked far below it.
+		lm.ProcessLayers(1e-12);
 		eps_low.push_back((lm.eps[0]/strata::eps0).real());
 		if (dc > 0)
-			t.check(std::abs(eps_low.back() - dc) < 1e-3*dc, "dc=" + fmt(dc) + ": eps(1 mHz) = " + fmt(eps_low.back(), 8));
+			t.check(std::abs(eps_low.back() - dc) < 1e-6*dc, "dc=" + fmt(dc) + ": eps(1e-12 Hz) = " + fmt(eps_low.back(), 8));
 	}
 	t.check(std::abs(eps_low[1] - eps_low[2]) > 0.5, "different DC permittivities give different models");
 });
