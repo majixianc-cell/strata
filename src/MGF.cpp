@@ -1627,7 +1627,8 @@ void MGF::AppendMGFTableZ(std::vector<std::vector<table_entry<N>>> &table, int l
         {
             double zp = lm.z_nodes[ii][tt];
 
-            if (zp == lm.z_nodes[layer_idx][z_idx])
+            // The pair (new node, new node) was added by the first loop
+            if (ii == layer_idx && tt == z_idx)
                 continue;
 
             double z = lm.z_nodes[layer_idx][z_idx];
@@ -1848,7 +1849,10 @@ void MGF::AddTableMapsZ(int layer_idx, int z_idx, int z_new_size)
 
     int map_size = z_to_idx.size();
 
-    int idx = layer_idx >= z_new_size ? layer_idx*layer_idx + layer_idx + z_new_size : layer_idx + z_new_size*z_new_size;
+    // Ids are sequential, as in GenerateTableMaps(). (A pairing function of the layer index and the new node count
+    // was used here, which collides with existing sequential ids, e.g. id 9 for a third node in layer 0 of a table
+    // with five layers of two nodes, so lookups returned rows of another node pair.)
+    int idx = (int)z_to_idx.size();
     z_to_idx.insert(std::make_pair(std::pair<int,double>(layer_idx, lm.z_nodes[layer_idx][z_idx]), idx));
 
 
@@ -1883,7 +1887,8 @@ void MGF::AddTableMapsZ(int layer_idx, int z_idx, int z_new_size)
 
             double zp = lm.z_nodes[ii][tt];
 
-            if (zp == lm.z_nodes[layer_idx][z_idx])
+            // The pair (new node, new node) was added by the first loop
+            if (ii == layer_idx && tt == z_idx)
                 continue;
 
             double z = lm.z_nodes[layer_idx][z_idx];
