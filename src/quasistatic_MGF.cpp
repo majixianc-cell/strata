@@ -410,6 +410,27 @@ void QuasistaticMGF::ComputeCurlQMGF_Spatial(double z, double zp, double rho)
 		else
 			ComputeCurlGHJmi_Spatial(z, zp, rho, curlK_spatial);
 	}
+
+	// The spectral quasistatic curl (ComputeCurlQMGF_Spectral) contains the homogeneous term of the source layer:
+	// P exp(-j kz_i |z - zp|) in component 1 and exp(-j kz_i |z - zp|)/(2 j kz_i) in components 2 and 3. The routines
+	// above leave it out of the spatial curl, so it was subtracted in the spectral domain and never added back.
+	// Its transforms are 2 |z - zp| (1 + j k R) exp(-j k R)/R^3 and rho (1 + j k R) exp(-j k R)/R^3 (before the 1/4pi
+	// below). With extract_singularities the term is left to the caller, as before.
+	if (!extract_singularities)
+	{
+		double dz = z - zp;
+		double R = std::sqrt(rho*rho + dz*dz);
+		if (R > 0.0)
+		{
+			std::complex<double> g = (1.0 + J*ki*R)*std::exp(-J*ki*R)/std::pow(R, 3);
+			if (components_curl[1])
+				curlK_spatial[1] += P*2.0*std::abs(dz)*g;
+			if (components_curl[2])
+				curlK_spatial[2] += rho*g;
+			if (components_curl[3])
+				curlK_spatial[3] += rho*g;
+		}
+	}
 	
 	curlK_spatial[0] /= 4.0*M_PI;
 	curlK_spatial[1] /= 4.0*M_PI;
