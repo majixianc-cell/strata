@@ -48,6 +48,57 @@
 using namespace strata;
 
 
+namespace
+{
+	// Wave number of the source layer (including the half-spaces).
+	std::complex<double> SourceLayerK(LayerManager &lm, int i)
+	{
+		if (i == -1)
+			return lm.k_top;
+		if (i == (int)lm.layers.size())
+			return lm.k_bot;
+		return lm.k[i];
+	}
+
+	// exp(-jkR)/R, or its nonsingular part (exp(-jkR) - 1)/R when the 1/R term is left to the caller.
+	std::complex<double> HomogeneousKernel(std::complex<double> k, double R, bool nonsingular)
+	{
+		if (!nonsingular)
+			return std::exp(-J*k*R)/R;
+		if (std::abs(k*R) > 0.1)
+			return (std::exp(-J*k*R) - 1.0)/R;
+		// Taylor series of (exp(-jkR) - 1)/R = sum_{n>=1} (-jk)^n R^(n-1)/n!
+		std::complex<double> term = -J*k, sum = term;
+		for (int n = 2; n < 30; n++)
+		{
+			term *= -J*k*R/(double)n;
+			sum += term;
+			if (std::abs(term) < 1.0e-17*std::abs(sum))
+				break;
+		}
+		return sum;
+	}
+
+	// Spatial transforms of the homogeneous terms that the spectral curl routines subtract with extract_homogeneous (and
+	// that the spectral quasistatic curl contains): P exp(-jkz|dz|) in component 1, exp(-jkz|dz|)/(2jkz) in components 2
+	// and 3. Their transforms are 2|dz|(1 + jkR)exp(-jkR)/(4 pi R^3) and rho(1 + jkR)exp(-jkR)/(4 pi R^3).
+	void AddHomogeneousCurl(std::array<std::complex<double>, 4> &G, std::complex<double> k, double rho, double dz, double P,
+	                        const std::vector<bool> &components_curl)
+	{
+		double R = std::sqrt(rho*rho + dz*dz);
+		if (!(R > 0.0))
+			return;
+		std::complex<double> g = (1.0 + J*k*R)*std::exp(-J*k*R)/(4.0*M_PI*std::pow(R, 3));
+		if (components_curl[1])
+			G[1] += P*2.0*std::abs(dz)*g;
+		if (components_curl[2])
+			G[2] += rho*g;
+		if (components_curl[3])
+			G[3] += rho*g;
+	}
+}
+
+
 // ==================================================================================
 // Interface
 // ==================================================================================
@@ -676,7 +727,17 @@ void MGF::ComputeMGF(double x_diff, double y_diff, double z, double zp, std::arr
 			ComputeSingularityFactors();
 	}
 	else if (s.extract_homogeneous)
+	{
+		// The homogeneous Green's function of the source layer was subtracted in the spectral domain; add it back, as
+		// documented. With extract_singularities only its nonsingular part is added and the coefficients of the 1/R
+		// term are returned by GetSingularityFactor().
 		ComputeHomogeneousFactors();
+		double R = std::sqrt(rho*rho + (z - zp)*(z - zp));
+		std::complex<double> g = HomogeneousKernel(SourceLayerK(lm, i), R, s.extract_singularities);
+		_G[0] += F[0]*g;
+		_G[3] += F[8]*g;
+		_G[4] += F_phi*g;
+	}
 
 	G[0] = _G[0];
 	G[1] = 0.0;
@@ -750,6 +811,12 @@ void MGF::ComputeCurlMGF(double x_diff, double y_diff, double z, double zp, std:
 
 		for (int jj = 0; jj < _G.size(); jj++)
 			_G[jj] += qmgf.GetResultCurl_Spatial(jj);
+	}
+	else if (s.extract_homogeneous && !s.extract_singularities)
+	{
+		// Add back the homogeneous curl terms subtracted in the spectral domain
+		double P = (i != m) ? ((m < i) ? 1.0 : -1.0) : ((z > zp) ? 1.0 : ((z < zp) ? -1.0 : 0.0));
+		AddHomogeneousCurl(_G, SourceLayerK(lm, i), rho, z - zp, P, s.components_curl);
 	}
 
 	G[0] = -(_G[0]*sin2_term/2.0);
