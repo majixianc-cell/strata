@@ -1282,23 +1282,19 @@ void MGF::ComputeHomogeneousFactors()
 // Computational helpers
 // ==================================================================================
 
-/*! \brief Check if distance is small enough that quasistatic terms alone are sufficient.*/
+/*! \brief Decide whether the quasistatic terms alone are used, without integrating the remainder.
+
+The quasistatic MGF holds the direct term and the first images only (one and two reflections in the source layer,
+one more in the observation layer). The remainder contains all higher-order images, which do not vanish at low
+frequency: for distances comparable to the layer heights they can dominate (a 1 um slab over ground at 1 MHz gave
+G_phi = -2015 instead of 32.5 with the former criterion Re(k_i r) < tol_qse). The remainder is therefore always
+integrated, except at zero frequency where the spectral integrand cannot be evaluated; the zero-frequency result is
+then only the first-image approximation. tol_qse is no longer used. (The former criterion also read lm.k[i] out of
+range for half-space source layers.)*/
 bool MGF::UseQuasistaticOnly(double rho, double z, double zp)
 {
 
-	bool quasistatic_only = false;
-	double r = std::sqrt(std::pow(rho, 2) + std::pow((z-zp), 2));
-	std::complex<double> g0 = std::exp(-J*lm.k[i]*r);
-	// if (std::abs(1.0 - std::abs(std::real(g0))) < s.tol_qse && std::abs(std::imag(g0)) < s.tol_qse)
-	if (std::abs(std::real(lm.k[i]*r)) < s.tol_qse)
-		quasistatic_only = true;
-
-	// temp
-	// return true;
-	// if (std::abs(r) < 5.0e-6)
-	// 	quasistatic_only = true;
-	
-	return quasistatic_only;
+	return !(omega > 0.0);
 
 }
 

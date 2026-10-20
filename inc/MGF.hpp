@@ -102,7 +102,7 @@ struct MGF_settings
 
 	// ------ Integration ------
 
-	double tol_qse = 1.0e-4;	
+	double tol_qse = 1.0e-4;	// unused since the quasistatic-only shortcut was restricted to zero frequency
 	double switching_point = -1.0;
 	
 	// ------ DCIM ------
