@@ -401,9 +401,8 @@ void DCIM::GenerateImages_TwoLevel(double z, double zp, std::vector<DCIM_images>
 	for (int ii = 0; ii < N_components; ii++)
 	{
 
-		if (!s.components[ii] && !curl_mode)
-			continue;
-		if (!s.components_curl[ii] && curl_mode)
+		// Check the mask that belongs to this mode only: the curl mask has four entries, the potential mask five.
+		if (curl_mode ? !s.components_curl[ii] : !s.components[ii])
 			continue;
 
 		// Run GPOF on level 1 samples
@@ -537,9 +536,8 @@ void DCIM::GenerateImages_OneLevel(double z, double zp, std::vector<DCIM_images>
 	for (int ii = 0; ii < N_components; ii++)
 	{
 
-		if (!s.components[ii] && !curl_mode)
-			continue;
-		if (!s.components_curl[ii] && curl_mode)
+		// Check the mask that belongs to this mode only: the curl mask has four entries, the potential mask five.
+		if (curl_mode ? !s.components_curl[ii] : !s.components[ii])
 			continue;
 
 		// Run GPOF on level 1 samples
@@ -693,9 +691,8 @@ void DCIM::GenerateImages_ThreeLevel(double z, double zp, std::vector<DCIM_image
 	for (int ii = 0; ii < N_components; ii++)
 	{
 
-		if (!s.components[ii] && !curl_mode)
-			continue;
-		if (!s.components_curl[ii] && curl_mode)
+		// Check the mask that belongs to this mode only: the curl mask has four entries, the potential mask five.
+		if (curl_mode ? !s.components_curl[ii] : !s.components[ii])
 			continue;
 
 		// Run GPOF on level 1 samples
