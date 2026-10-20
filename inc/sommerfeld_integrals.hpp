@@ -323,11 +323,20 @@ void PartExtrap(const F f, double a, double q, double tol, std::complex<double> 
 	X[0] = a;
 	bool converged = false;
 
+	// The W-algorithm divides by differences of 1/x and by the remainder estimates w, and its result A[0]/B[0] does
+	// not change when x or w is rescaled. It is therefore run in units of the partition width q and of the first
+	// partition integral: with the raw values, rho in the nanometre range (q = pi/rho ~ 1e9) overflowed A and B after
+	// about 25 partitions and returned NaN.
+	double Xn [kmax + 2];
+	Xn[0] = a/q;
+	double w_scale = 1.0;
+
 	// Begin extrapolated integration over partitions
 	for (int kk = 1; kk <= kmax+1; kk++)
 	{
 		// Execute quadrature over the current partition
 		X[kk] = X[kk-1] + q;
+		Xn[kk] = Xn[kk-1] + 1.0;
 		TanhSinh(f, X[kk-1], X[kk], eps, u);
 
 		CheckComplexResultForInfOrNaN(u, "the TanhSinh partition integration result");
@@ -340,8 +349,10 @@ void PartExtrap(const F f, double a, double q, double tol, std::complex<double> 
 
 		// Execute extrapolation		
 		s += u;
-		w = u; 
-		val = LevinSidi(kk-1, s, w, X, A, B);
+		if (kk == 1)
+			w_scale = std::abs(u);
+		w = u/w_scale;
+		val = LevinSidi(kk-1, s, w, Xn, A, B);
 		CheckComplexResultForInfOrNaN(val, "the Levin-Sidi extrapolation result");
 		if (std::abs(val - old) < tol*std::abs(val))
 		{

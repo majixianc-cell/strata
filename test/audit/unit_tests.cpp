@@ -344,6 +344,26 @@ Reg qd_partextrap("QD-partextrap-nonconv", "PartExtrap does not silently return 
 	t.check(thrown || after == before + 1, "non-convergence is reported (exception or diagnostic counter)");
 }, 30);
 
+Reg qd_partextrap_scale("QD-partextrap-scale", "PartExtrap stays finite for nanometre rho (partitions ~1e9 wide)", [](T &t) {
+	// int_a^inf J0(rho x) x^(-1/2) dx, with int_0^inf = Gamma(1/4)/(Gamma(3/4) sqrt(2 rho)). Tolerance 0 uses every
+	// partition, as an unconverged (noisy) tail does.
+	for (double rho : {1e-3, 2.5e-9, 1e-10})
+	{
+		double a = boost::math::cyl_bessel_j_zero(0.0, 1)/rho;
+		auto g = [rho](double x) { return boost::math::cyl_bessel_j(0, rho*x)/std::sqrt(x); };
+		auto f = [&g](double x) { return C(g(x)); };
+		boost::math::quadrature::tanh_sinh<double> ts;
+		double head = ts.integrate(g, 0.0, a);
+		double exact = std::tgamma(0.25)/(std::tgamma(0.75)*std::sqrt(2.0*rho));
+		C tail = 0.0;
+		std::string what = "finite";
+		try { PartExtrap(f, a, M_PI/rho, 0.0, tail); }
+		catch (const std::exception &e) { what = e.what(); }
+		double err = std::abs(head + tail - exact)/exact;
+		t.check(what == "finite" && err < 1e-6, "rho = " + fmt(rho) + ": " + what + ", rel error " + fmt(err, 3));
+	}
+}, 60);
+
 // ================================================================================================
 // Direct integration: closed forms
 // ================================================================================================
