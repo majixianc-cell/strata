@@ -444,6 +444,9 @@ void LayerManager::ProcessLayers(double f)
 			return std::complex<double> ((epsr.real()*eps0),  epsr.imag()*eps0 + 0.0);
 	};
 	
+	if (layers.empty())
+		throw std::logic_error("[ERROR] LayerManager::ProcessLayers(): No layers have been defined; at least one layer of finite height is required.");
+
 	// Make sure that any consecutive layers with the same material properties are merged
 	MergeLayersWithSameMaterial();
   
