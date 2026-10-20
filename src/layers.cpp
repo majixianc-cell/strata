@@ -222,7 +222,7 @@ void LayerManager::ProcessTechFile_tech(std::string tech_file, double units)
 	tech_stream.open(tech_file);
 
 	if (!tech_stream.good())
-		std::cout << "[ERROR] LayerManager::ProcessTechFile(): Tech file could not be found or opened." << std::endl;
+		throw std::runtime_error("[ERROR] LayerManager::ProcessTechFile(): Tech file " + tech_file + " could not be found or opened.");
 
 	std::string label;
 	double zmin, zmax, h;
@@ -252,8 +252,9 @@ void LayerManager::ProcessTechFile_tech(std::string tech_file, double units)
 		std::string line;
 		getline(tech_stream, line); // Now the current position is the end of this line
 		
-		// Get rid of the trailing newline character
-		line = line.substr(0, line.length() - 1);
+		// getline() has already removed the newline; remove the carriage return of Windows line endings, if any
+		if (!line.empty() && line.back() == '\r')
+			line.pop_back();
                        
 		if (!line[0] || (line[0] == '/' && line[1] == '/')) // Blank line or comment
 			continue;
