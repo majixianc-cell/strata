@@ -36,12 +36,41 @@
 
 #include <cmath>
 #include <complex>
+#include <limits>
 #include <stdexcept>
 
 #include "quasistatic_MGF.hpp"
 #include "constants.hpp"
 
 using namespace strata;
+
+
+namespace
+{
+	// Images that a half-space source layer does not have (no far boundary) carry an infinite distance, see
+	// ComputeGammaTerms(). They contribute nothing; their exponentials are not evaluated, since exp(-j k inf) is NaN
+	// for real k and the zero reflection coefficient multiplying them would not remove a NaN.
+	inline std::complex<double> ImageExp(std::complex<double> a, double d)
+	{
+		return std::isinf(d) ? std::complex<double>(0.0) : std::exp(-a*d);
+	}
+	inline std::complex<double> ImageG(std::complex<double> jk, double r)
+	{
+		return std::isinf(r) ? std::complex<double>(0.0) : std::exp(-jk*r)/r;
+	}
+	inline std::complex<double> ImageS1(double rho, double g, double r)
+	{
+		return std::isinf(r) ? std::complex<double>(0.0) : std::complex<double>((1.0/rho)*(1.0 - g/r));
+	}
+	inline std::complex<double> ImageCurl(std::complex<double> jk, double g, double r)
+	{
+		return std::isinf(r) ? std::complex<double>(0.0) : g*(1.0 + jk*r)*std::exp(-jk*r)/std::pow(r, 3);
+	}
+	inline std::complex<double> ImageCurlS2(double rho, double g, double r)
+	{
+		return std::isinf(r) ? std::complex<double>(0.0) : std::complex<double>(std::pow((-g + r), 2)*(2.0*r + g)/std::pow(rho, 2)/std::pow(r, 3));
+	}
+}
 
 
 // ==================================================================================
@@ -1800,7 +1829,7 @@ void QuasistaticMGF::ComputeExpTermsKii_kz(double z, double zp, std::complex<dou
 
 	std::fill(exp_terms.begin(), exp_terms.end(), 0.0);
 	for (int ii = 0; ii < exp_terms.size(); ii++)
-		exp_terms[ii] = std::exp(-jkzi*gamma[ii]);
+		exp_terms[ii] = ImageExp(jkzi, gamma[ii]);
 	
 	return;
 
@@ -1816,7 +1845,7 @@ void QuasistaticMGF::ComputeExpTermsKii_krho(double z, double zp, std::complex<d
 
 	std::fill(exp_terms.begin(), exp_terms.end(), 0.0);
 	for (int ii = 0; ii < exp_terms.size(); ii++)
-		exp_terms[ii] = std::exp(-krho*gamma[ii]);
+		exp_terms[ii] = ImageExp(krho, gamma[ii]);
 
 	return;
 
@@ -1832,7 +1861,7 @@ void QuasistaticMGF::ComputeExpTermsKmi_krho(double z, double zp, std::complex<d
 	
 	std::fill(exp_terms.begin(), exp_terms.end(), 0.0);
 	for (int ii = 0; ii < alpha.size(); ii++)
-		exp_terms[ii] = std::exp(-krho*alpha[ii]);
+		exp_terms[ii] = ImageExp(krho, alpha[ii]);
 
 	return;
 
@@ -1848,7 +1877,7 @@ void QuasistaticMGF::ComputeExpTermsKmi_kz(double z, double zp, std::complex<dou
 		
 	std::fill(exp_terms.begin(), exp_terms.end(), 0.0);
 	for (int ii = 0; ii < alpha.size(); ii++)
-		exp_terms[ii] = std::exp(-J*kzi*alpha[ii]);
+		exp_terms[ii] = ImageExp(J*kzi, alpha[ii]);
 
 	return;
 
@@ -1869,7 +1898,7 @@ void QuasistaticMGF::ComputeExpTermsKii_SpatialS0(double z, double zp, double rh
 	if (!extract_singularities)
 	{
 		for (int ii = 0; ii < exp_terms.size(); ii++)
-			exp_terms[ii] = std::exp(-jki*ksi[ii])/ksi[ii];
+			exp_terms[ii] = ImageG(jki, ksi[ii]);
 	}
 	else
 	{
@@ -1880,23 +1909,23 @@ void QuasistaticMGF::ComputeExpTermsKii_SpatialS0(double z, double zp, double rh
 		if (AxiallyCoincident(z, zp) && AxiallyCoincident(z, lm->GetZmin(i)))
 		{
 			exp_terms[1] = exp_terms[0];
-			exp_terms[2] = std::exp(-jki*ksi[2])/ksi[2];
+			exp_terms[2] = ImageG(jki, ksi[2]);
 		}
 		// Source and observer are at the top interface of the layer
 		// else if (AxiallyCoincident(z, zp) && AxiallyCoincident(z, lm->layers[i].zmax))
 		else if (AxiallyCoincident(z, zp) && AxiallyCoincident(z, lm->GetZmax(i)))
 		{
-			exp_terms[1] = std::exp(-jki*ksi[1])/ksi[1];
+			exp_terms[1] = ImageG(jki, ksi[1]);
 			exp_terms[2] = exp_terms[0];
 		}
 		else
 		{
-			exp_terms[1] = std::exp(-jki*ksi[1])/ksi[1];
-			exp_terms[2] = std::exp(-jki*ksi[2])/ksi[2];
+			exp_terms[1] = ImageG(jki, ksi[1]);
+			exp_terms[2] = ImageG(jki, ksi[2]);
 		}
 
-		exp_terms[3] = std::exp(-jki*ksi[3])/ksi[3];
-		exp_terms[4] = std::exp(-jki*ksi[4])/ksi[4];
+		exp_terms[3] = ImageG(jki, ksi[3]);
+		exp_terms[4] = ImageG(jki, ksi[4]);
 	}
 	
 	return;
@@ -1923,7 +1952,7 @@ void QuasistaticMGF::ComputeExpTermsKii_SpatialS1(double z, double zp, double rh
 	if (!extract_singularities)
 	{
 		for (int ii = 1; ii < exp_terms.size(); ii++)
-			exp_terms[ii] = (1.0/rho)*(1.0 - gamma[ii]/ksi[ii]);
+			exp_terms[ii] = ImageS1(rho, gamma[ii], ksi[ii]);
 	}
 	else
 	{
@@ -1932,23 +1961,23 @@ void QuasistaticMGF::ComputeExpTermsKii_SpatialS1(double z, double zp, double rh
 		if (AxiallyCoincident(z, zp) && AxiallyCoincident(z, lm->GetZmin(i)))
 		{
 			exp_terms[1] = 0.0;
-			exp_terms[2] = (1.0/rho)*(1.0 - gamma[2]/ksi[2]);
+			exp_terms[2] = ImageS1(rho, gamma[2], ksi[2]);
 		}
 		// Source and observer are at the top interface of the layer
 		// else if (AxiallyCoincident(z, zp) && AxiallyCoincident(z, lm->layers[i].zmax))
 		else if (AxiallyCoincident(z, zp) && AxiallyCoincident(z, lm->GetZmax(i)))
 		{
-			exp_terms[1] = (1.0/rho)*(1.0 - gamma[1]/ksi[1]);
+			exp_terms[1] = ImageS1(rho, gamma[1], ksi[1]);
 			exp_terms[2] = 0.0;
 		}
 		else
 		{
-			exp_terms[1] = (1.0/rho)*(1.0 - gamma[1]/ksi[1]);
-			exp_terms[2] = (1.0/rho)*(1.0 - gamma[2]/ksi[2]);
+			exp_terms[1] = ImageS1(rho, gamma[1], ksi[1]);
+			exp_terms[2] = ImageS1(rho, gamma[2], ksi[2]);
 		}
 		
-		exp_terms[3] = (1.0/rho)*(1.0 - gamma[3]/ksi[3]);
-		exp_terms[4] = (1.0/rho)*(1.0 - gamma[4]/ksi[4]);
+		exp_terms[3] = ImageS1(rho, gamma[3], ksi[3]);
+		exp_terms[4] = ImageS1(rho, gamma[4], ksi[4]);
 	}
 
 	return;
@@ -2016,7 +2045,7 @@ void QuasistaticMGF::ComputeExpTermsKmi_SpatialS0(double z, double zp, double rh
 	if (!extract_singularities)
 	{
 		for (int ii = 0; ii < exp_terms.size(); ii++)
-			exp_terms[ii] = std::exp(-jki*ksi[ii])/ksi[ii];
+			exp_terms[ii] = ImageG(jki, ksi[ii]);
 	}
 	else
 	{
@@ -2025,23 +2054,23 @@ void QuasistaticMGF::ComputeExpTermsKmi_SpatialS0(double z, double zp, double rh
 		if (!AxiallyCoincident(z, zp))
 		{
 			for (int ii = 1; ii < exp_terms.size(); ii++)
-				exp_terms[ii] = std::exp(-jki*ksi[ii])/ksi[ii];
+				exp_terms[ii] = ImageG(jki, ksi[ii]);
 		}
 		else
 		{
 			if (m == i + 1)
 			{
 				exp_terms[1] = exp_terms[0];
-				exp_terms[2] = std::exp(-jki*ksi[2])/ksi[2];;
+				exp_terms[2] = ImageG(jki, ksi[2]);;
 			}
 			else if (m == i - 1)
 			{
-				exp_terms[1] = std::exp(-jki*ksi[1])/ksi[1];;
+				exp_terms[1] = ImageG(jki, ksi[1]);;
 				exp_terms[2] = exp_terms[0];
 			}
 
 			for (int ii = 3; ii < exp_terms.size(); ii++)
-				exp_terms[ii] = std::exp(-jki*ksi[ii])/ksi[ii];
+				exp_terms[ii] = ImageG(jki, ksi[ii]);
 		}
 	}
 	
@@ -2069,7 +2098,7 @@ void QuasistaticMGF::ComputeExpTermsKmi_SpatialS1(double z, double zp, double rh
 	if (!extract_singularities || !AxiallyCoincident(z, zp))
 	{
 		for (int ii = 0; ii < exp_terms.size(); ii++)
-			exp_terms[ii] = (1.0/rho)*(1.0 - alpha[ii]/ksi[ii]);
+			exp_terms[ii] = ImageS1(rho, alpha[ii], ksi[ii]);
 	}
 	else if (AxiallyCoincident(z, zp))
 	{
@@ -2078,16 +2107,16 @@ void QuasistaticMGF::ComputeExpTermsKmi_SpatialS1(double z, double zp, double rh
 		if (m == i + 1)
 		{
 			exp_terms[1] = 0.0;
-			exp_terms[2] = (1.0/rho)*(1.0 - alpha[2]/ksi[2]);
+			exp_terms[2] = ImageS1(rho, alpha[2], ksi[2]);
 		}
 		else if (m == i - 1)
 		{
-			exp_terms[1] = (1.0/rho)*(1.0 - alpha[1]/ksi[1]);
+			exp_terms[1] = ImageS1(rho, alpha[1], ksi[1]);
 			exp_terms[2] = 0.0;
 		}
 
 		for (int ii = 3; ii < exp_terms.size(); ii++)
-			exp_terms[ii] = (1.0/rho)*(1.0 - alpha[ii]/ksi[ii]);
+			exp_terms[ii] = ImageS1(rho, alpha[ii], ksi[ii]);
 	}
 
 	return;
@@ -2153,6 +2182,14 @@ void QuasistaticMGF::ComputeGammaTerms(double z, double zp, std::array<double, 5
 	gamma[2] = 2.0*zmax - (z + zp);
 	gamma[3] = 2.0*h - z + zp;
 	gamma[4] = 2.0*h + z - zp;
+
+	// A half-space has a single boundary: the images from the missing one and the double bounces do not exist
+	// (zmin/zmax are placeholders there and h is infinite). Mark them with an infinite distance.
+	const double inf = std::numeric_limits<double>::infinity();
+	if (i == -1)
+		gamma[2] = gamma[3] = gamma[4] = inf;
+	else if (i == (int)lm->layers.size())
+		gamma[1] = gamma[3] = gamma[4] = inf;
 
 	return;
 
@@ -2354,7 +2391,7 @@ void QuasistaticMGF::ComputeTermsCurlKii_SpatialS0(double z, double zp, double r
 
 	std::fill(terms.begin(), terms.end(), 0.0);
 	for (int ii = 1; ii < terms.size(); ii++)
-		terms[ii] = gamma[ii]*(1.0 + jki*ksi[ii])*std::exp(-jki*ksi[ii])/std::pow(ksi[ii], 3);
+		terms[ii] = ImageCurl(jki, gamma[ii], ksi[ii]);
 
 	if (extract_singularities && AxiallyCoincident(z, zp))
 	{
@@ -2393,7 +2430,7 @@ void QuasistaticMGF::ComputeTermsCurlKii_SpatialS1(double z, double zp, double r
 		return;
 
 	for (int ii = 1; ii < terms.size(); ii++)
-		terms[ii] = rho*(1.0 + jki*ksi[ii])*std::exp(-jki*ksi[ii])/std::pow(ksi[ii], 3);
+		terms[ii] = ImageCurl(jki, rho, ksi[ii]);
 
 	return;
 
@@ -2417,7 +2454,7 @@ void QuasistaticMGF::ComputeTermsCurlKii_SpatialS2(double z, double zp, double r
 		return;
 
 	for (int ii = 1; ii < terms.size(); ii++)
-		terms[ii] = std::pow((-gamma[ii] + ksi[ii]), 2)*(2.0*ksi[ii] + gamma[ii])/std::pow(rho, 2)/std::pow(ksi[ii], 3);
+		terms[ii] = ImageCurlS2(rho, gamma[ii], ksi[ii]);
 
 	return;
 
@@ -2438,7 +2475,7 @@ void QuasistaticMGF::ComputeTermsCurlKmi_SpatialS0(double z, double zp, double r
 
 	std::fill(terms.begin(), terms.end(), 0.0);
 	for (int ii = 1; ii < terms.size(); ii++)
-		terms[ii] = alpha[ii]*(1.0 + jki*ksi[ii])*std::exp(-jki*ksi[ii])/std::pow(ksi[ii], 3);
+		terms[ii] = ImageCurl(jki, alpha[ii], ksi[ii]);
 
 	if (extract_singularities && AxiallyCoincident(z, zp))
 	{
@@ -2473,7 +2510,7 @@ void QuasistaticMGF::ComputeTermsCurlKmi_SpatialS1(double z, double zp, double r
 		return;
 
 	for (int ii = 1; ii < terms.size(); ii++)
-		terms[ii] = rho*(1.0 + jki*ksi[ii])*std::exp(-jki*ksi[ii])/std::pow(ksi[ii], 3);
+		terms[ii] = ImageCurl(jki, rho, ksi[ii]);
 
 	return;
 
@@ -2497,7 +2534,7 @@ void QuasistaticMGF::ComputeTermsCurlKmi_SpatialS2(double z, double zp, double r
 		return;
 
 	for (int ii = 1; ii < terms.size(); ii++)
-		terms[ii] = std::pow((-alpha[ii] + ksi[ii]), 2)*(2.0*ksi[ii] + alpha[ii])/std::pow(rho, 2)/std::pow(ksi[ii], 3);
+		terms[ii] = ImageCurlS2(rho, alpha[ii], ksi[ii]);
 
 	return;
 
