@@ -580,7 +580,11 @@ void MGF::SetComponents(std::vector<bool> components)
 	if (s.extract_quasistatic || s.method == MGF_QUASISTATIC)
 		qmgf.components = components;
 	if (s.method == MGF_INTEGRATE || s.method == MGF_INTERPOLATE)
+	{
 		smgf.components = components;
+		// The spectral engine subtracts the quasistatic part with its own nested engine
+		smgf.qmgf.components = components;
+	}
 	if (s.method == MGF_DCIM ||
 		(s.method == MGF_INTERPOLATE && s.sampling_method == MGF_DCIM))
 		dcim.s.components = components;
@@ -598,7 +602,10 @@ void MGF::SetCurlComponents(std::vector<bool> components_curl)
 	if (s.extract_quasistatic || s.method == MGF_QUASISTATIC)
 		qmgf.components_curl = components_curl;
 	if (s.method == MGF_INTEGRATE || s.method == MGF_INTERPOLATE)
+	{
 		smgf.components_curl = components_curl;
+		smgf.qmgf.components_curl = components_curl;
+	}
 	if (s.method == MGF_DCIM ||
 		(s.method == MGF_INTERPOLATE && s.sampling_method == MGF_DCIM))
 		dcim.s.components_curl = components_curl;
