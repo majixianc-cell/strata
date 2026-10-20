@@ -482,8 +482,10 @@ void MGF::AddRhoTable(double rho_test)
     // Insert the value
     lm.rho_nodes.insert(position, rho_test);
 
-    // Update the interpolation table
+    // Update the interpolation tables (the curl table shares the nodes and the maps)
     AppendMGFTableRho(MGF_table, index, rho_size + 1);
+    if (s.compute_curl)
+        AppendMGFTableRho(CurlMGF_table, index, rho_size + 1, true);
 
     std::cout << "-->Add this point to the interpolation table!" << std::endl;
 }
@@ -500,8 +502,10 @@ void MGF::AddZTable(double z_test, int layer)
     // Insert the value
     lm.z_nodes[layer].insert(position, z_test);
 
-    // Update the interpolation table
+    // Update the interpolation tables (the curl table shares the nodes and the maps, which are updated once)
     AppendMGFTableZ(MGF_table, layer, index, z_size + 1);
+    if (s.compute_curl)
+        AppendMGFTableZ(CurlMGF_table, layer, index, z_size + 1, true, false);
 
     std::cout << "-->Add this point to the interpolation table!" << std::endl;
 }
@@ -1569,7 +1573,7 @@ void MGF::TabulateMGF(std::vector<std::vector<table_entry<N>>> &table, bool curl
 
 
 template<std::size_t N>
-void MGF::AppendMGFTableZ(std::vector<std::vector<table_entry<N>>> &table, int layer_idx, int z_idx, int z_new_size, bool curl)
+void MGF::AppendMGFTableZ(std::vector<std::vector<table_entry<N>>> &table, int layer_idx, int z_idx, int z_new_size, bool curl, bool update_maps)
 {
 
     if (lm.z_nodes.size() < 1)
@@ -1581,7 +1585,8 @@ void MGF::AppendMGFTableZ(std::vector<std::vector<table_entry<N>>> &table, int l
 
     // ====== Generate index maps ======
 
-    AddTableMapsZ(layer_idx, z_idx, z_new_size);
+    if (update_maps)
+        AddTableMapsZ(layer_idx, z_idx, z_new_size);
 
 
     // ====== Generate table ======

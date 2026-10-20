@@ -209,7 +209,7 @@ private:
 	template<std::size_t N>
 	void TabulateMGF(std::vector<std::vector<table_entry<N>>> &table, bool curl = false);
     template<std::size_t N>
-    void AppendMGFTableZ(std::vector<std::vector<table_entry<N>>> &table, int layer_idx, int z_idx, int z_new_idx, bool curl = false);
+    void AppendMGFTableZ(std::vector<std::vector<table_entry<N>>> &table, int layer_idx, int z_idx, int z_new_idx, bool curl = false, bool update_maps = true);
     template<std::size_t N>
     void AppendMGFTableRho(std::vector<std::vector<table_entry<N>>> &table, int rho_idx, int rho_new_idx, bool curl = false);
     void GenerateTableMaps();
