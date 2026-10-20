@@ -1473,17 +1473,22 @@ void MGF::TabulateMGF(std::vector<std::vector<table_entry<N>>> &table, bool curl
     // Generate index maps
     GenerateTableMaps();
 
-    MGF mgfLocal = *this;
+    // Thread-local copy of the engine. The tables are moved out while copying: copying them here (and once more per
+    // thread through firstprivate) multiplied the memory needed for a large table by the number of threads + 1.
+    MGF mgfLocal = CopyWithoutTables();
 
 #pragma omp parallel firstprivate(mgfLocal, L, R, totalRows, nActive, onlyLayer) \
     default(none) shared(table, lm, s, layerOffsets, curl)
     {
 #pragma omp single
         {
-            std::printf("\n[OMP] num_threads=%d, max_threads=%d\n",
-                        omp_get_num_threads(), omp_get_max_threads());
-            std::printf("[OMP] L=%d, nActive=%d, onlyLayer=%d, totalRows=%d, R=%d\n",
-                        L, nActive, onlyLayer, totalRows, R);
+            if (s.verbose)
+            {
+                std::printf("\n[OMP] num_threads=%d, max_threads=%d\n",
+                            omp_get_num_threads(), omp_get_max_threads());
+                std::printf("[OMP] L=%d, nActive=%d, onlyLayer=%d, totalRows=%d, R=%d\n",
+                            L, nActive, onlyLayer, totalRows, R);
+            }
         }
 
         // ============================================================
@@ -1715,7 +1720,9 @@ void MGF::AppendMGFTableRho(std::vector<std::vector<table_entry<N>>> &table, int
 
 
     // Make a thread‑local copy of *this* (carries i,m, smgf, maps, settings…)
-    MGF mgfLocal = *this;
+    // Thread-local copy of the engine. The tables are moved out while copying: copying them here (and once more per
+    // thread through firstprivate) multiplied the memory needed for a large table by the number of threads + 1.
+    MGF mgfLocal = CopyWithoutTables();
 	int ii, mm, ss, tt, idx_z, idx_zp, idx_row;
     int zLenSrc, zLenObs;
     double z, zp, rho;
@@ -1790,6 +1797,20 @@ void MGF::AppendMGFTableRho(std::vector<std::vector<table_entry<N>>> &table, int
 
 }
 
+
+
+/*! \brief Copy of this engine without the interpolation tables (for the thread-local engines that fill them).*/
+MGF MGF::CopyWithoutTables()
+{
+	std::vector<std::vector<table_entry<5>>> mgf_table;
+	std::vector<std::vector<table_entry<4>>> curl_table;
+	mgf_table.swap(MGF_table);
+	curl_table.swap(CurlMGF_table);
+	MGF copy = *this;
+	mgf_table.swap(MGF_table);
+	curl_table.swap(CurlMGF_table);
+	return copy;
+}
 
 
 /*! \brief Generate maps for interpolation table access.*/
