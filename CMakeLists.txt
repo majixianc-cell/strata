@@ -32,7 +32,8 @@ ENABLE_LANGUAGE(C)
 ENABLE_LANGUAGE(CXX)
 ENABLE_LANGUAGE(Fortran)
 
-set(CMAKE_CXX_STANDARD 11)
+# Boost.Math >= 1.82 (picked up by find_package(Boost) when installed system-wide) requires C++14.
+set(CMAKE_CXX_STANDARD 14)
 add_definitions(-march=native)
 string(REPLACE "-O2" "-O3" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
 
@@ -143,20 +144,24 @@ set(AmosBessel_INC "${AMOSBESSEL_ROOT}/include/AmosBessel")
 
 find_package(yaml-cpp QUIET)
 
-if (NOT yaml_cpp_FOUND)
+# find_package(yaml-cpp) sets yaml-cpp_FOUND (with a hyphen) and, in its config file, YAML_CPP_INCLUDE_DIR and
+# YAML_CPP_LIBRARIES. yaml-cpp 0.6.3 declares cmake_minimum_required(VERSION 2.8.5), which CMake >= 4.0 rejects
+# unless CMAKE_POLICY_VERSION_MINIMUM is given; its tests and tools are not needed here.
+if (NOT yaml-cpp_FOUND)
 	set(YAML_CPP_ROOT ${BUILD_EXT}/yaml-cpp)
 	ExternalProject_Add(external_yaml_cpp
 	    GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
 	    GIT_TAG 9a3624205e8774953ef18f57067b3426c1c5ada6
 	    PREFIX ${YAML_CPP_ROOT}
 	    CMAKE_ARGS -DYAML_BUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX=${YAML_CPP_ROOT}
+	               -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DYAML_CPP_BUILD_TESTS=OFF -DYAML_CPP_BUILD_TOOLS=OFF
 	)
-	
+
 	set(YAML_LIB "${YAML_CPP_ROOT}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}yaml-cpp${CMAKE_SHARED_LIBRARY_SUFFIX}")
 	set(YAML_INC "${YAML_CPP_ROOT}/include")
 else()
-	set(YAML_LIB ${yaml-cpp_INCLUDE_DIRS})
-	set(YAML_INC ${yaml-cpp_LIBRARIES})	
+	set(YAML_LIB ${YAML_CPP_LIBRARIES})
+	set(YAML_INC ${YAML_CPP_INCLUDE_DIR})
 endif()
 
 # ------ Documentation ------
@@ -218,7 +223,7 @@ else ()
 endif()
 
 # Add YAML-CPP dependency if externally downloaded
-if (NOT yaml_cpp_FOUND)
+if (NOT yaml-cpp_FOUND)
     add_dependencies(strata external_yaml_cpp)
 endif()
 
