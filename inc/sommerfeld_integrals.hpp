@@ -291,10 +291,20 @@ inline std::complex<double> IntegrateSpectralNearField(SpectralMGF &smgf, double
 	krho_real = zero_offset;
 	GaussKronrodBoost(f_imag, 0.0, h, tol, first_path);
 
-	// Second path
+	// Second path. J_n(krho rho) oscillates along it, (a - zero_offset) rho/pi half-periods (28 for rho = 5 um at an
+	// optical frequency), and one adaptive rule over all of them could accept an aliased estimate: the homogeneous medium
+	// of upstream issue #5 came out wrong by O(1). As for the tail, the path is split into pieces of at most half a period.
 	std::complex<double> second_path = 0.0;
 	krho_imag = h;
-	GaussKronrodBoost(f_real, zero_offset, a, tol, second_path);
+	double half_periods = (rho > 0.0) ? std::ceil((a - zero_offset)*rho/M_PI) : 1.0;
+	int panels = (int)std::min(std::max(half_periods, 1.0), 1.0e5);
+	double width = (a - zero_offset)/panels;
+	for (int p = 0; p < panels; p++)
+	{
+		std::complex<double> part = 0.0;
+		GaussKronrodBoost(f_real, zero_offset + p*width, zero_offset + (p + 1)*width, tol, part);
+		second_path += part;
+	}
 	// TanhSinhBoost(f_real, zero_offset, a, tol, second_path);
 	
 	// Third path
