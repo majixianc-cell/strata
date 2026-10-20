@@ -35,6 +35,16 @@ ENABLE_LANGUAGE(Fortran)
 # Boost.Math >= 1.82 (picked up by find_package(Boost) when installed system-wide) requires C++14.
 set(CMAKE_CXX_STANDARD 14)
 add_definitions(-march=native)
+
+# GCC 15.2 (x86-64 with FMA, e.g. -march=native) miscompiles complex arithmetic in Strata when floating-point
+# contraction across statements meets SLP vectorization (vfmaddsub with a wrong operand, apparently GCC PR 125654):
+# SpectralMGF::ComputeCurlGEMii() with extract_homogeneous lost or squared parts of a subtraction, so the curl kernels
+# were wrong by O(1). Contraction is therefore disabled for GCC; this also makes results identical on CPUs with and
+# without FMA. Set STRATA_ALLOW_FP_CONTRACT to ON to keep the compiler default.
+option(STRATA_ALLOW_FP_CONTRACT "Allow GCC to contract floating-point operations across statements (FMA)" OFF)
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT STRATA_ALLOW_FP_CONTRACT)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=off>)
+endif()
 string(REPLACE "-O2" "-O3" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
 
 find_package(OpenMP)
