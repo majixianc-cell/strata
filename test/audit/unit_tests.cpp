@@ -353,10 +353,13 @@ Reg qd_homog("QD-homogeneous", "INTEGRATE in a homogeneous medium matches exp(-j
 	std::vector<P> pts = {
 		{4.0, 1.0, 0.0, 1e9, 0.0, 1e-3, 3e-3}, {4.0, 1.0, 0.0, 1e9, 0.0, 0.0, 3e-3}, {2.0, 2.0, 0.02, 3e9, -2e-3, 4e-3, 1e-2},
 		{1.0, 1.0, 0.0, 30e9, 0.0, 2e-3, 0.05}, {11.9, 1.0, 10.0, 1e8, 0.0, 1e-5, 2e-5},
+		// upstream issue #5: emitter at 640 nm in a single layer with the same medium above and below (n = 1.5)
+		{2.25, 1.0, 0.0, 4.684e14, 0.0, 0.3e-6, 1.0e-6}, {2.25, 1.0, 0.0, 4.684e14, 0.0, 0.0, 2.0e-6},
 	};
 	for (auto &p : pts)
 	{
-		LayerManager lm = homogeneous(p.epsr, p.mur, p.sigma, -0.05, 0.05, p.f);
+		double half = (p.f > 1e13) ? 5e-6 : 0.05;
+		LayerManager lm = homogeneous(p.epsr, p.mur, p.sigma, -half, half, p.f);
 		MGF mgf;
 		MGF_settings s = quiet(MGF_INTEGRATE);
 		mgf.Initialize(p.f, lm, s);
