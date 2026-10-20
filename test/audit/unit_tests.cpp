@@ -417,6 +417,92 @@ Reg qd_nearaxis("QD-nearaxis", "small positive rho with a large vertical separat
 	}
 }, 120);
 
+Reg qd_poles("QD-surface-wave-poles", "lossless thick substrate: default tolerance agrees with a converged integration", [](T &t) {
+	// Grounded four-layer substrate (eps_r up to 12.5) at 30 GHz: several surface-wave poles on the real axis
+	// between k0 and k_max. Cross-layer point of the physics checks where the curl was off by 5.6e-4.
+	const double f = 30e9;
+	auto stack = [f]() {
+		LayerManager lm;
+		lm.AddLayer(1.1e-3, 1.8e-3, {2.1, 0.0}, 1.0, 0.0, 0.0);
+		lm.AddLayer(0.8e-3, 1.1e-3, {12.5, 0.0}, 1.0, 0.0, 0.0);
+		lm.AddLayer(0.3e-3, 0.8e-3, {9.8, 0.0}, 1.0, 0.0, 0.0);
+		lm.AddLayer(0.0, 0.3e-3, {8.6, 0.0}, 1.0, 0.0, 0.0);
+		lm.SetHalfspaces(1.0, 1.0, 0.0, 1.0, 1.0, 0.0, false, true);
+		lm.ProcessLayers(f);
+		return lm;
+	};
+	const double rho = 0.35e-3, phi = 0.3, z = 0.55e-3, zp = 1.38e-3;
+	std::array<C, 9> G[2], H[2];
+	C p[2];
+	for (int pass = 0; pass < 2; ++pass)
+	{
+		LayerManager lm = stack();
+		MGF mgf;
+		MGF_settings s = quiet(MGF_INTEGRATE);
+		s.compute_curl = true;
+		s.curl_type = MGF_GHJ;
+		if (pass == 1) s.tol_quadrature = 1e-10;
+		mgf.Initialize(f, lm, s);
+		mgf.SetLayers(lm.FindLayer(zp), lm.FindLayer(z));
+		mgf.ComputeMGF(rho*std::cos(phi), rho*std::sin(phi), z, zp, G[pass], p[pass]);
+		mgf.ComputeCurlMGF(rho*std::cos(phi), rho*std::sin(phi), z, zp, H[pass]);
+	}
+	double gs = 0.0, hs = 0.0, ge = 0.0, he = 0.0;
+	for (int n = 0; n < 9; ++n) { gs = std::max(gs, std::abs(G[1][n])); hs = std::max(hs, std::abs(H[1][n])); }
+	for (int n = 0; n < 9; ++n) { ge = std::max(ge, std::abs(G[0][n] - G[1][n])/gs); he = std::max(he, std::abs(H[0][n] - H[1][n])/hs); }
+	ge = std::max(ge, std::abs(p[0] - p[1])/std::abs(p[1]));
+	t.check(ge < 1e-6, "MGF and G_phi: max deviation " + fmt(ge, 3));
+	t.check(he < 1e-6, "curl (G_HJ): max deviation " + fmt(he, 3));
+}, 300);
+
+// Default settings against a converged integration (tol_quadrature = 1e-10) of the same engine, optionally with the
+// switching point of the reference moved to ref_switching_point.
+double max_deviation(LayerManager (*stack)(), double f, MGF_settings s, double rho, double z, double zp,
+                     double ref_switching_point = -1.0)
+{
+	std::array<C, 9> G[2], H[2];
+	C p[2];
+	for (int pass = 0; pass < 2; ++pass)
+	{
+		LayerManager lm = stack();
+		MGF mgf;
+		MGF_settings ss = s;
+		if (pass == 1)
+		{
+			ss.tol_quadrature = 1e-10;
+			ss.switching_point = ref_switching_point;
+		}
+		mgf.Initialize(f, lm, ss);
+		mgf.SetLayers(lm.FindLayer(zp), lm.FindLayer(z));
+		mgf.ComputeMGF(rho*std::cos(0.3), rho*std::sin(0.3), z, zp, G[pass], p[pass]);
+		mgf.ComputeCurlMGF(rho*std::cos(0.3), rho*std::sin(0.3), z, zp, H[pass]);
+	}
+	double gs = std::max(std::abs(G[1][0]), std::abs(G[1][8])), hs = 0.0, e = std::abs(p[0] - p[1])/std::abs(p[1]);
+	for (int n = 0; n < 9; ++n) hs = std::max(hs, std::abs(H[1][n]));
+	for (int n = 0; n < 9; ++n) e = std::max({e, std::abs(G[0][n] - G[1][n])/gs, std::abs(H[0][n] - H[1][n])/hs});
+	return e;
+}
+
+LayerManager hi_eps_halfspace()
+{
+	LayerManager lm;
+	lm.AddLayer(0.0, 0.2e-3, {4.0, 0.0}, 1.0, 0.0, 0.0);
+	lm.SetHalfspaces(1.0, 1.0, 0.0, 12.0, 1.0, 0.0, false, false);
+	lm.ProcessLayers(10e9);
+	return lm;
+}
+
+LayerManager thin_nm()
+{
+	LayerManager lm;
+	lm.AddLayer(25e-9, 30e-9, {7.0, 0.0}, 1.0, 0.0, 0.0);
+	lm.AddLayer(5e-9, 25e-9, {25.0, 0.0}, 1.0, 0.0, 0.0);
+	lm.AddLayer(-1e-6, 5e-9, {3.9, 0.0}, 1.0, 0.0, 0.0);
+	lm.SetHalfspaces(1.0, 1.0, 0.0, 11.9, 1.0, 10.0, false, false);
+	lm.ProcessLayers(1e9);
+	return lm;
+}
+
 Reg qd_farrho("QD-large-rho", "rho beyond the tabulated Bessel zeros (a*rho > 1566.87)", [](T &t) {
 	const double f = 30e9;
 	LayerManager lm = homogeneous(1.0, 1.0, 0.0, -0.01, 0.01, f);

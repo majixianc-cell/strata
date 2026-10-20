@@ -259,11 +259,15 @@ inline std::complex<double> IntegrateSpectralNearField(SpectralMGF &smgf, double
 
 	const std::complex<double> J (0.0, 1.0);
 	
-	// Different problems seem to require different settings for h. A more robust way to pick it would be useful.
-	
-	// double h = 1.0e-2*std::abs(smgf.lm->k_max);
-	double h = 1.0e-3*std::abs(smgf.lm->k_max);
-	// double h = 1.0e-1*std::abs(smgf.lm->k_max);
+	// Height h of the horizontal path. For lossless media the integrand has surface-wave poles on the real axis between
+	// the smallest and the largest wave number; at the former fixed height h = 1e-3 |k_max| they were peaks of width h
+	// that the adaptive rule could step over (a curl component of a lossless grounded substrate at 30 GHz was off by
+	// 5.6e-4). The first quadrant has no singularities for passive media, so the path is raised as far as the growth of
+	// J_n(krho rho) ~ exp(h rho) permits: h = min(|k_max|/2, 1/rho), but not below the former height.
+	double h = 0.5*std::abs(smgf.lm->k_max);
+	if (rho > 0.0)
+		h = std::min(h, 1.0/rho);
+	h = std::max(h, 1.0e-3*std::abs(smgf.lm->k_max));
 	double krho_real, krho_imag;
 	
 	// MGF integrand functor for a fixed imaginary part in the complex plane
