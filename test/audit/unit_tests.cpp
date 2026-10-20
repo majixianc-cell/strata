@@ -614,6 +614,55 @@ Reg qs_fresnel("QS-halfspace-fresnel", "Fresnel coefficients seen from a half-sp
 	t.check(std::abs(bot.Fe - fe_bot) < 1e-14 && std::abs(bot.Fh) < 1e-14, "upward from the bottom half-space: Fe " + fmt(bot.Fe) + " expected " + fmt(fe_bot));
 });
 
+Reg qs_curl_transform("QS-curl-transform", "spatial quasistatic curl = Sommerfeld transform of the spectral one, across layers", [](T &t) {
+	// Lossy source layers keep the branch point of the quasistatic terms off the real axis, so the transform can be
+	// integrated along it: (1/2pi) int curlK(krho) J_nu(krho rho) krho^(nu+1) dkrho, nu = 2, 0, 1, 1.
+	const double f = 10e9;
+	LayerManager lm;
+	lm.AddLayer(0.0, 1e-3, {4.0, -1.0}, 1.0, 0.0, 0.0);
+	lm.AddLayer(-1e-3, 0.0, {2.0, -0.5}, 1.5, 0.0, 0.0);
+	lm.SetHalfspaces(1.0, 1.0, 0.0, 6.0, 1.0, 0.0, false, false);
+	lm.ProcessLayers(f);
+	const int nu[4] = {2, 0, 1, 1};
+	struct Cfg { double z, zp; const char *name; };
+	for (Cfg c : {Cfg{-0.5e-3, 0.5e-3, "layer 0 -> layer 1"}, Cfg{0.5e-3, -0.5e-3, "layer 1 -> layer 0"},
+	              Cfg{2.0e-3, 0.5e-3, "layer 0 -> top half-space"}, Cfg{-2.0e-3, -0.5e-3, "layer 1 -> bottom half-space"}})
+		for (bool gem : {true, false})
+		{
+			const double rho = 0.7e-3;
+			QuasistaticMGF q;
+			q.Initialize(&lm, f);
+			if (gem) q.SetCurlToGEM(); else q.SetCurlToGHJ();
+			q.SetLayers(lm.FindLayer(c.zp), lm.FindLayer(c.z));
+			q.ComputeCurlQMGF_Spatial(c.z, c.zp, rho);
+			std::array<C, 4> spatial, transform;
+			for (int n = 0; n < 4; ++n) spatial[n] = q.GetResultCurl_Spatial(n);
+			for (int n = 0; n < 4; ++n)
+			{
+				auto g = [&](double kr) {
+					q.ComputeCurlQMGF_Spectral(c.z, c.zp, C(kr, 0.0));
+					return q.GetResultCurl_Spectral(n)*boost::math::cyl_bessel_j(nu[n], kr*rho)*std::pow(kr, nu[n] + 1)/(2.0*M_PI);
+				};
+				boost::math::quadrature::gauss_kronrod<double, 61> rule;
+				C sum = 0.0;
+				const double w = M_PI/rho;
+				for (int k = 0, small = 0; k < 2000 && small < 3; ++k)
+				{
+					C part = rule.integrate(g, k*w, (k + 1)*w, 15, 1e-13);
+					sum += part;
+					small = (std::abs(part) < 1e-15*std::abs(sum)) ? small + 1 : 0;
+				}
+				transform[n] = sum;
+			}
+			double scale = 0.0, err = 0.0;
+			for (int n = 0; n < 4; ++n) scale = std::max(scale, std::abs(transform[n]));
+			for (int n = 0; n < 4; ++n) err = std::max(err, std::abs(spatial[n] - transform[n])/scale);
+			// (the numerical transform itself is good to about 1e-9; the factor-2 error was >= 3e-2)
+			t.check(err < 1e-7, std::string(c.name) + (gem ? " GEM" : " GHJ") + ": max error " + fmt(err, 3) +
+			        " (curl 0: " + fmt(spatial[0]) + " vs " + fmt(transform[0]) + ")");
+		}
+}, 300);
+
 // ================================================================================================
 // DCIM
 // ================================================================================================

@@ -1587,6 +1587,9 @@ void QuasistaticMGF::ComputeCurlGEMmi_Spatial(double z, double zp, double rho, s
 	}
 	
 	// For VV, the m < i case is treated as the reciprocal to the m > i case.
+	// The spatial image terms (ImageCurl, ImageCurlS2) are the transforms of the spectral exponentials divided by 2,
+	// as in the same-layer routines, so the factor 1/2 of the spectral expressions is not applied again here (it
+	// halved the reflected and transmitted parts of curl components 0 and 1).
 	
 	bool reciprocal = false;
 	if (m < i)
@@ -1605,12 +1608,12 @@ void QuasistaticMGF::ComputeCurlGEMmi_Spatial(double z, double zp, double rho, s
 
 		auto ComputeVVe = [this, &Rr, &Rl] (std::array<std::complex<double>, 10> &terms)
 			{
-				return (1.0/2.0)*(-Rl.Fe*terms[1] + Rr.Fe*terms[2] - Rl.Fe*Rr.Fe*(terms[3] - terms[4]) + this->Rm.Fe*(this->P*terms[5] - Rl.Fe*terms[6] + Rr.Fe*terms[7] - Rl.Fe*Rr.Fe*(terms[8] - terms[9])))*MVe;
+				return (-Rl.Fe*terms[1] + Rr.Fe*terms[2] - Rl.Fe*Rr.Fe*(terms[3] - terms[4]) + this->Rm.Fe*(this->P*terms[5] - Rl.Fe*terms[6] + Rr.Fe*terms[7] - Rl.Fe*Rr.Fe*(terms[8] - terms[9])))*MVe;
 			};
 
 		auto ComputeVVh = [this, &Rr, &Rl] (std::array<std::complex<double>, 10> &terms)
 			{
-				return (1.0/2.0)*(-Rl.Fh*terms[1] + Rr.Fh*terms[2] - Rl.Fh*Rr.Fh*(terms[3] - terms[4]) + this->Rm.Fh*(this->P*terms[5] - Rl.Fh*terms[6] + Rr.Fh*terms[7] - Rl.Fh*Rr.Fh*(terms[8] - terms[9])))*MVh;
+				return (-Rl.Fh*terms[1] + Rr.Fh*terms[2] - Rl.Fh*Rr.Fh*(terms[3] - terms[4]) + this->Rm.Fh*(this->P*terms[5] - Rl.Fh*terms[6] + Rr.Fh*terms[7] - Rl.Fh*Rr.Fh*(terms[8] - terms[9])))*MVh;
 			};
 
 		if (components_curl[0])
@@ -1633,12 +1636,12 @@ void QuasistaticMGF::ComputeCurlGEMmi_Spatial(double z, double zp, double rho, s
 
 		auto ComputeIIe = [this, &Rr, &Rl] (std::array<std::complex<double>, 10> &terms)
 			{
-				return (-1.0/2.0)*((epsm/epsi)*(Rl.Fe*terms[1] + Rr.Fe*terms[2] + Rl.Fe*Rr.Fe*(terms[3] + terms[4]) - this->Rm.Fe*(terms[5] + Rl.Fe*terms[6] + Rr.Fe*terms[7] + Rl.Fe*Rr.Fe*(terms[8] + terms[9]))))*MVe;
+				return -((epsm/epsi)*(Rl.Fe*terms[1] + Rr.Fe*terms[2] + Rl.Fe*Rr.Fe*(terms[3] + terms[4]) - this->Rm.Fe*(terms[5] + Rl.Fe*terms[6] + Rr.Fe*terms[7] + Rl.Fe*Rr.Fe*(terms[8] + terms[9]))))*MVe;
 			};
 
 		auto ComputeIIh = [this, &Rr, &Rl] (std::array<std::complex<double>, 10> &terms)
 			{
-				return (-1.0/2.0)*((mui/mum)*(Rl.Fh*terms[1] + Rr.Fh*terms[2] + Rl.Fh*Rr.Fh*(terms[3] + terms[4]) - this->Rm.Fh*(terms[5] + Rl.Fh*terms[6] + Rr.Fh*terms[7] + Rl.Fh*Rr.Fh*(terms[8] + terms[9]))))*MVh;
+				return -((mui/mum)*(Rl.Fh*terms[1] + Rr.Fh*terms[2] + Rl.Fh*Rr.Fh*(terms[3] + terms[4]) - this->Rm.Fh*(terms[5] + Rl.Fh*terms[6] + Rr.Fh*terms[7] + Rl.Fh*Rr.Fh*(terms[8] + terms[9]))))*MVh;
 			};
 
 		if (components_curl[0])
@@ -1738,6 +1741,9 @@ void QuasistaticMGF::ComputeCurlGHJmi_Spatial(double z, double zp, double rho, s
 	}
 	
 	// For VV, the m < i case is treated as the reciprocal to the m > i case.
+	// The spatial image terms (ImageCurl, ImageCurlS2) are the transforms of the spectral exponentials divided by 2,
+	// as in the same-layer routines, so the factor 1/2 of the spectral expressions is not applied again here (it
+	// halved the reflected and transmitted parts of curl components 0 and 1).
 	
 	bool reciprocal = false;
 	if (m < i)
@@ -1756,12 +1762,12 @@ void QuasistaticMGF::ComputeCurlGHJmi_Spatial(double z, double zp, double rho, s
 
 		auto ComputeIIe = [this, &Rr, &Rl] (std::array<std::complex<double>, 10> &terms)
 			{
-				return (-1.0/2.0)*((epsm/epsi)*(Rl.Fe*terms[1] + Rr.Fe*terms[2] + Rl.Fe*Rr.Fe*(terms[3] + terms[4]) - this->Rm.Fe*(terms[5] + Rl.Fe*terms[6] + Rr.Fe*terms[7] + Rl.Fe*Rr.Fe*(terms[8] + terms[9]))))*MVe;
+				return -((epsm/epsi)*(Rl.Fe*terms[1] + Rr.Fe*terms[2] + Rl.Fe*Rr.Fe*(terms[3] + terms[4]) - this->Rm.Fe*(terms[5] + Rl.Fe*terms[6] + Rr.Fe*terms[7] + Rl.Fe*Rr.Fe*(terms[8] + terms[9]))))*MVe;
 			};
 
 		auto ComputeIIh = [this, &Rr, &Rl] (std::array<std::complex<double>, 10> &terms)
 			{
-				return (-1.0/2.0)*((mui/mum)*(Rl.Fh*terms[1] + Rr.Fh*terms[2] + Rl.Fh*Rr.Fh*(terms[3] + terms[4]) - this->Rm.Fh*(terms[5] + Rl.Fh*terms[6] + Rr.Fh*terms[7] + Rl.Fh*Rr.Fh*(terms[8] + terms[9]))))*MVh;
+				return -((mui/mum)*(Rl.Fh*terms[1] + Rr.Fh*terms[2] + Rl.Fh*Rr.Fh*(terms[3] + terms[4]) - this->Rm.Fh*(terms[5] + Rl.Fh*terms[6] + Rr.Fh*terms[7] + Rl.Fh*Rr.Fh*(terms[8] + terms[9]))))*MVh;
 			};
 
 		if (components_curl[0])
@@ -1784,12 +1790,12 @@ void QuasistaticMGF::ComputeCurlGHJmi_Spatial(double z, double zp, double rho, s
 
 		auto ComputeVVe = [this, &Rr, &Rl] (std::array<std::complex<double>, 10> &terms)
 			{
-				return (1.0/2.0)*(-Rl.Fe*terms[1] + Rr.Fe*terms[2] - Rl.Fe*Rr.Fe*(terms[3] - terms[4]) + this->Rm.Fe*(this->P*terms[5] - Rl.Fe*terms[6] + Rr.Fe*terms[7] - Rl.Fe*Rr.Fe*(terms[8] - terms[9])))*MVe;
+				return (-Rl.Fe*terms[1] + Rr.Fe*terms[2] - Rl.Fe*Rr.Fe*(terms[3] - terms[4]) + this->Rm.Fe*(this->P*terms[5] - Rl.Fe*terms[6] + Rr.Fe*terms[7] - Rl.Fe*Rr.Fe*(terms[8] - terms[9])))*MVe;
 			};
 
 		auto ComputeVVh = [this, &Rr, &Rl] (std::array<std::complex<double>, 10> &terms)
 			{
-				return (1.0/2.0)*(-Rl.Fh*terms[1] + Rr.Fh*terms[2] - Rl.Fh*Rr.Fh*(terms[3] - terms[4]) + this->Rm.Fh*(this->P*terms[5] - Rl.Fh*terms[6] + Rr.Fh*terms[7] - Rl.Fh*Rr.Fh*(terms[8] - terms[9])))*MVh;
+				return (-Rl.Fh*terms[1] + Rr.Fh*terms[2] - Rl.Fh*Rr.Fh*(terms[3] - terms[4]) + this->Rm.Fh*(this->P*terms[5] - Rl.Fh*terms[6] + Rr.Fh*terms[7] - Rl.Fh*Rr.Fh*(terms[8] - terms[9])))*MVh;
 			};
 
 		if (components_curl[0])
