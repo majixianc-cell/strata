@@ -131,12 +131,19 @@ def spectral_cases(rng, n):
         st = Stack(layers, top=top, bot=bot, f=f)
         regions = list(range(st.N)) + ([] if top[3] else [-1]) + ([] if bot[3] else [st.N])
         q = []
-        for _ in range(6):
+        for nq in range(7):
             s, o = int(rng.choice(regions)), int(rng.choice(regions))
             zp = point_in(rng, st, s)
             z = point_in(rng, st, o)
             if s == o and rng.random() < 0.2:
                 z = zp
+            if nq == 6 and st.N > 1:
+                # source and observer on a common interface, assigned to the two adjacent layers
+                s = int(rng.integers(0, st.N - 1))
+                o = s + 1
+                if rng.random() < 0.5:
+                    s, o = o, s
+                z = zp = float(st.zmin[min(s, o)])
             km = st.kmax()
             for kr in [km*rng.uniform(0.01, 2) + 1j*km*rng.uniform(0.001, 0.5), km*rng.uniform(1.5, 30),
                        rng.uniform(1, 30)/max(1e-9, st.zmax[0] - st.zmin[-1]) + 0j]:
