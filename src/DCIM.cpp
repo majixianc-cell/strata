@@ -48,8 +48,11 @@
  ***************************************************************/
 
 
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 
 #if defined(USE_MKL)
 	#include <mkl.h>
@@ -820,77 +823,84 @@ void DCIM::GenerateSpectralSamples(SpectralMGF &smgf, std::vector<std::vector<st
 }
 
 
-/*! \brief Function to approximate given function samples with expnentials via the GPOF method.*/
+/*! \brief Function to approximate given function samples with expnentials via the GPOF method.
+
+Generalized pencil of functions (Hua, Sarkar): y_k ~ sum_j a_j exp(alpha_j k dt). The pencil parameter L defaults to
+N/2; max_num_images > 0 overrides it. Only the M singular values above tol_svd times the largest are kept and the
+reduced M x M matrix Z = D_M^-1 U_M^H Y2 V_M is used, so that the leading dimensions match the full SVD returned by
+ComputeSVD() for any L (they did not for L > N/2), eigenvalues are ordered by magnitude before the tol_eig cut (LAPACK
+does not order them), and data without any nonzero singular value - e.g. a component that vanishes by symmetry -
+gives no images instead of dividing by zero singular values.*/
 void DCIM::RunGPOF(std::vector<std::complex<double>> &y, double dt, std::vector<std::complex<double>> &a, std::vector<std::complex<double>> &alpha, double tol_svd, double tol_eig, int max_num_images)
 {
 
 	a.clear();
 	alpha.clear();
 
-	int N = y.size(), L = N/2, M;
+	int N = y.size(), L = N/2;
 	if (max_num_images > 0)
 		L = max_num_images;
+	if (N < 2 || L < 1 || L > N - 1)
+		throw std::invalid_argument("[ERROR] DCIM::RunGPOF(): The pencil parameter must lie between 1 and N-1 (got " + std::to_string(L) + " for N = " + std::to_string(N) + ").");
 
-	std::vector<std::complex<double>> Y1 ((N-L)*L), Y2 ((N-L)*L);
+	// Scale the data to unit magnitude; identically zero data has no images
+	double ymax = 0.0;
+	for (const auto &v : y)
+		ymax = std::max(ymax, std::abs(v));
+	if (!(ymax > 0.0) || !std::isfinite(ymax))
+		return;
 
-	// Populate matrices Y1 and Y2 from the data array y
-	for (int ii = 0; ii < L; ii++) // traverse columns
+	// Populate matrices Y1 and Y2 (column major, (N-L) x L) from the scaled data
+	int m = (N-L), n = L;
+	std::vector<std::complex<double>> Y1 (m*n), Y2 (m*n);
+	for (int ii = 0; ii < n; ii++) // traverse columns
 	{
-		for (int jj = 0; jj < (N-L); jj++) // traverse rows
+		for (int jj = 0; jj < m; jj++) // traverse rows
 		{
-			Y1[jj + ii*(N-L)] = y[jj+ii];
-			Y2[jj + ii*(N-L)] = y[jj+ii+1];
+			Y1[jj + ii*m] = y[jj+ii]/ymax;
+			Y2[jj + ii*m] = y[jj+ii+1]/ymax;
 		}
 	}
 
-	// Run SVD on Y1
-	int m = (N-L), n = L;
+	// Full SVD of Y1: u is m x m (leading dimension m), vt = V^H is n x n (leading dimension n)
 	std::vector<double> s;
 	std::vector<std::complex<double>> u, vt;
 	ComputeSVD(Y1, m, n, s, u, vt, false);
 
-	// Populate the inverse diagonal matrix of singular values D_inv
 	int ns = s.size();
-	std::vector<std::complex<double>> D_inv (ns*ns, 0.0);
-	for (int ii = 0; ii < ns; ii++)
-		D_inv[ii + ii*ns] = 1.0/s[ii];
+	if (ns < 1 || !(s[0] > 0.0))
+		return;
 
-	// Only keep singular values whose ratio to the maximum is greater than q.
-	// Could use Matlab's method to figure out how many singular values to keep:
-	// q = max(size(A))*eps(norm(A)) based on Matlab's doc for pinv.
-	// Accordingly truncate the matrix D_inv.
-	// However, this method seems to allow too much noise through, so for now, set it manually.
-	int nst;
-	for (nst = 1; nst < ns; nst++)
-		if (s[nst] < tol_svd*s[0])
+	// Keep the singular values whose ratio to the largest one exceeds tol_svd
+	int M;
+	for (M = 1; M < ns; M++)
+		if (s[M] < tol_svd*s[0])
 			break;
 
-	for (int ii = nst; ii < ns; ii++)
-		D_inv[ii + ii*ns] = 0.0;
-
-	// Compute Z = D_inv*u^H*Y2*v
-
-	std::vector<std::complex<double>> c1 (m*ns), c2 (ns*ns), Z (ns*ns);
+	// Z = D_M^-1 U_M^H Y2 V_M, with V_M = (first M rows of vt)^H and U_M the first M columns of u
+	std::vector<std::complex<double>> c1 (m*M), c2 (M*M), Z (M*M);
 	std::complex<double> cblas_alpha = 1.0, cblas_beta = 0.0;
 
-	cblas_zgemm(CblasColMajor, CblasNoTrans, CblasConjTrans, m, ns, n, &cblas_alpha,
-             &Y2[0], m, &vt[0], ns, &cblas_beta, &c1[0], m);
-	
-	cblas_zgemm(CblasColMajor, CblasConjTrans, CblasNoTrans, ns, ns, m, &cblas_alpha,
-             &u[0], m, &c1[0], m, &cblas_beta, &c2[0], ns);
+	cblas_zgemm(CblasColMajor, CblasNoTrans, CblasConjTrans, m, M, n, &cblas_alpha,
+             &Y2[0], m, &vt[0], n, &cblas_beta, &c1[0], m);
 
-	cblas_zgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, ns, ns, ns, &cblas_alpha,
-             &D_inv[0], ns, &c2[0], ns, &cblas_beta, &Z[0], ns);
+	cblas_zgemm(CblasColMajor, CblasConjTrans, CblasNoTrans, M, M, m, &cblas_alpha,
+             &u[0], m, &c1[0], m, &cblas_beta, &c2[0], M);
 
-	// Compute eigenvalues of the Z matrix
+	for (int jj = 0; jj < M; jj++)
+		for (int ii = 0; ii < M; ii++)
+			Z[ii + jj*M] = c2[ii + jj*M]/s[ii];
+
+	// Eigenvalues of Z, ordered by decreasing magnitude; drop (relatively) small and zero ones
 	std::vector<std::complex<double>> w;
-	ComputeEigenvalues(Z, ns, w, false);
+	ComputeEigenvalues(Z, M, w, false);
+	std::sort(w.begin(), w.end(), [](const std::complex<double> &p, const std::complex<double> &q) { return std::abs(p) > std::abs(q); });
 
-	// Get rid of (relatively) small eigenvalues
-	int nwt;
-	for (nwt = 1; nwt < ns; nwt++)
-		if (std::abs(w[nwt]) < tol_eig*std::abs(w[0]))
-			break;
+	int nwt = 0;
+	while (nwt < M && std::abs(w[nwt]) > 0.0 && std::isfinite(std::abs(w[nwt])) && std::abs(w[nwt]) >= tol_eig*std::abs(w[0]))
+		nwt++;
+	if (nwt == 0)
+		return;
 
 	// Set up the system of equations for coefficients
 	std::vector<std::complex<double>> Y3 (N*nwt);
@@ -899,15 +909,15 @@ void DCIM::RunGPOF(std::vector<std::complex<double>> &y, double dt, std::vector<
 			Y3[jj + ii*N] = std::pow(w[ii], jj);
 
 	// Solve the system to get the coefficients
-	std::vector<std::complex<double>> b = y;
+	std::vector<std::complex<double>> b (N);
+	for (int jj = 0; jj < N; jj++)
+		b[jj] = y[jj]/ymax;
 	SolveLeastSquares(Y3, b, N, nwt, 1, false);
 
 	// Extract the computed coefficients
 	for (int ii = 0; ii < nwt; ii++)
 	{
-		// if (max_num_images > 0 && ii > max_num_images)
-		// 	break;
-		a.push_back(b[ii]);
+		a.push_back(b[ii]*ymax);
 		alpha.push_back(std::log(w[ii])/dt);
 	}
 
