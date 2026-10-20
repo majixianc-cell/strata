@@ -23,7 +23,9 @@
 //     [refint, rho, z, zp, i, m, kind, comp]
 //                                       independent Sommerfeld integration (elliptic path + Bessel-zero
 //                                       partitions + Levin-Sidi) of Strata's own spectral kernel:
-//                                       kind 0 = MGF component comp (0..4), 1 = GEM curl, 2 = GHJ curl
+//                                       kind 0 = MGF component comp (0..4), 1 = GEM curl, 2 = GHJ curl;
+//                                       kinds 3, 4, 5: the same for the quasistatic spectral terms (fresh
+//                                       QuasistaticMGF), to be compared with qspat
 //     [findlayer, z]                    LayerManager::FindLayer on the processed stack-up
 //
 // Every output line carries "q" (query index) and either the values or "err".
@@ -114,7 +116,7 @@ void read_settings(const YAML::Node &n, MGF_settings &s)
 	for (auto it = n.begin(); it != n.end(); ++it)
 	{
 		const std::string k = it->first.as<std::string>();
-		const YAML::Node &v = it->second;
+		const YAML::Node v = it->second;   // copy: operator-> returns a temporary proxy
 		if (k == "method") s.method = method_of(v.as<std::string>());
 		else if (k == "sampling_method") s.sampling_method = method_of(v.as<std::string>());
 		else if (k == "curl_type") s.curl_type = (v.as<std::string>() == "GHJ") ? MGF_GHJ : MGF_GEM;
@@ -218,6 +220,21 @@ struct RefKernel
 
 	C operator()(C krho) const
 	{
+		if (kind >= 3)
+		{
+			QuasistaticMGF qm;
+			qm.Initialize(lm, f, s.components, s.extract_singularities);
+			if (kind == 4) qm.SetCurlToGEM();
+			if (kind == 5) qm.SetCurlToGHJ();
+			qm.SetLayers(i, m);
+			if (kind == 3)
+			{
+				qm.ComputeQMGF_Spectral(z, zp, krho);
+				return qm.GetResult_Spectral(comp);
+			}
+			qm.ComputeCurlQMGF_Spectral(z, zp, krho);
+			return qm.GetResultCurl_Spectral(comp);
+		}
 		SpectralMGF sm;
 		sm.Initialize(lm, f, s.components, s.extract_quasistatic, s.extract_homogeneous);
 		if (kind == 1) sm.SetCurlToGEM();
@@ -513,7 +530,7 @@ int main(int argc, char **argv)
 				double rho = q[1].as<double>(), z = q[2].as<double>(), zp = q[3].as<double>();
 				int i = layer(q[4].as<int>(), zp), m = layer(q[5].as<int>(), z);
 				RefKernel K{&L, f, s, i, m, z, zp, q[6].as<int>(), q[7].as<int>()};
-				int order = K.kind == 0 ? mgf_order(K.comp) : curl_order(K.comp);
+				int order = (K.kind == 0 || K.kind == 3) ? mgf_order(K.comp) : curl_order(K.comp);
 				RefIntegral r = ref_integrate(K, rho, order);
 				o << ",\"i\":" << i << ",\"m\":" << m << ",\"value\":" << cnum(r.value) << ",\"err_est\":" << num(r.err)
 				  << ",\"partitions\":" << r.partitions << ",\"converged\":" << (r.converged ? 1 : 0);
