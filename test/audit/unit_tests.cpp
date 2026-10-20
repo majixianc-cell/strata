@@ -1310,6 +1310,10 @@ Reg qs_hs("QS-halfspace-finite", "quasistatic terms with the source in a half-sp
 int main(int argc, char **argv)
 {
 	std::string filter = argc > 1 ? argv[1] : "";
+	// Time limits can be stretched for slow (e.g. sanitizer) builds: STRATA_TEST_TIMEOUT_SCALE=10
+	double scale = std::getenv("STRATA_TEST_TIMEOUT_SCALE") ? std::atof(std::getenv("STRATA_TEST_TIMEOUT_SCALE")) : 1.0;
+	if (!(scale > 0.0))
+		scale = 1.0;
 	int failed = 0, run = 0;
 	for (const auto &c : registry())
 	{
@@ -1323,7 +1327,7 @@ int main(int argc, char **argv)
 		if (pid == 0)
 		{
 			close(fd[0]);
-			alarm(c.timeout);
+			alarm((unsigned)std::ceil(c.timeout*scale));
 			T t;
 			std::string status;
 			try
@@ -1353,7 +1357,7 @@ int main(int argc, char **argv)
 		{
 			int sig = WTERMSIG(st);
 			verdict = sig == SIGALRM ? "TIMEOUT" : "CRASH";
-			details = "      " + std::string(sig == SIGALRM ? "time limit " + std::to_string(c.timeout) + " s exceeded" : "signal " + std::to_string(sig) + " (" + strsignal(sig) + ")") + "\n";
+			details = "      " + std::string(sig == SIGALRM ? "time limit " + std::to_string((unsigned)std::ceil(c.timeout*scale)) + " s exceeded" : "signal " + std::to_string(sig) + " (" + strsignal(sig) + ")") + "\n";
 			auto nl = out.find('\n');
 			if (nl != std::string::npos) details += out.substr(nl + 1);
 		}
