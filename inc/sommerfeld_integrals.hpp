@@ -359,32 +359,82 @@ inline std::complex<double> SommerfeldIntegrandFamily(SpectralMGF &smgf, double 
 }
 
 
+/*! \brief Adaptive 21-point Gauss-Kronrod on [lo, hi] with an absolute error target: a subinterval is split only while
+its error estimate exceeds its share of abs_tol (at most depth levels). At small krho the kernel families can be pure
+rounding noise, where the TE and TM parts cancel (K1, K2, K4 lose about (krho d)^-2 digits); a relative criterion on each
+subinterval then refines to the maximum depth although that part of the integral is negligible (one evaluation of G_xz
+took 40-120 s at 1 Hz - 1 kHz).*/
+template<class F>
+std::complex<double> GaussKronrodAbs(const F &f, double lo, double hi, double abs_tol, int depth = 12)
+{
+	boost::math::quadrature::gauss_kronrod<double, 21> rule;
+	double err = 0.0;
+	std::complex<double> v = rule.integrate(f, lo, hi, 0, 0.0, &err);
+	if (err <= abs_tol || depth == 0)
+		return v;
+	double mid = 0.5*(lo + hi);
+	return GaussKronrodAbs(f, lo, mid, 0.5*abs_tol, depth - 1) + GaussKronrodAbs(f, mid, hi, 0.5*abs_tol, depth - 1);
+}
+
+
+/*! \brief Single 21-point Gauss-Kronrod estimate of the integral of f over [lo, hi] (the coarse pass that sets the scale).*/
+template<class F>
+std::complex<double> GaussKronrodCoarse(const F &f, double lo, double hi)
+{
+	boost::math::quadrature::gauss_kronrod<double, 21> rule;
+	double err = 0.0;
+	return rule.integrate(f, lo, hi, 0, 0.0, &err);
+}
+
+
+/*! \brief Integral of f over the segments [lo, hi] (lo < hi) to the absolute target tol L1/(number of segments). On entry
+L1 is the magnitude of the rest of the integral; the magnitudes of single-rule estimates of the segments are added to it.*/
+template<class F>
+std::complex<double> IntegrateSegments(const F &f, const std::vector<std::pair<double, double>> &seg, double tol, double &L1)
+{
+	for (const auto &s : seg)
+		L1 += std::abs(GaussKronrodCoarse(f, s.first, s.second));
+	double target = tol*L1/std::max<double>(1.0, (double)seg.size());
+	std::complex<double> sum = 0.0;
+	for (const auto &s : seg)
+		sum += GaussKronrodAbs(f, s.first, s.second, target);
+	return sum;
+}
+
+
 /*! \brief Spectral far-field integral of f(krho) from a to infinity along the real axis (path of IntegrateSpectralFarField()).
 
 decay > 0 is a length over which the integrand is known to decay at least like exp(-krho decay). The partition
 extrapolation then only starts once that decay has made the integrand negligible (at 40/decay, if this lies within 800
 half periods): with a power of krho above 1 the integrand grows beyond the first zero of J_order for rho >> decay, and
-an extrapolation started there was off by up to 6e-6 (lateral derivative of G_zz with rho = 33 um, decay = 5.8 um).*/
+an extrapolation started there was off by up to 6e-6 (lateral derivative of G_zz with rho = 33 um, decay = 5.8 um).
+The finite panels are integrated to a tolerance relative to the magnitude L1 of the whole integral (returned in L1), not
+of each panel, so that noisy panels at small krho cost a single rule.*/
 template<class F>
-std::complex<double> IntegrateFarFieldGeneric(const F &f, double rho, int order, double a, double tol, double decay = -1.0)
+std::complex<double> IntegrateFarFieldGeneric(const F &f, double rho, int order, double a, double tol, double decay, double &L1)
 {
+
+	std::vector<std::pair<double, double>> seg;
+	L1 = 0.0;
 
 	if (rho < 1.0e-15)
 	{
-		std::complex<double> result = 0.0;
+		// Panels doubling from a until their single-rule estimates are negligible, then a semi-infinite rule
 		double left = a, width = (a > 0.0) ? a : 1.0;
+		std::complex<double> coarse = 0.0;
 		for (int panel = 0, negligible = 0; panel < 200 && negligible < 3; panel++)
 		{
-			std::complex<double> part = 0.0;
-			GaussKronrodBoost(f, left, left + width, tol, part);
-			result += part;
-			negligible = (std::abs(part) <= tol*std::abs(result)) ? negligible + 1 : 0;
+			std::complex<double> part = GaussKronrodCoarse(f, left, left + width);
+			seg.push_back({left, left + width});
+			coarse += part;
+			negligible = (std::abs(part) <= tol*std::abs(coarse)) ? negligible + 1 : 0;
 			left += width;
 			width *= 2.0;
 		}
 		std::complex<double> tail = 0.0;
 		GaussKronrodBoost(f, left, std::numeric_limits<double>::infinity(), tol, tail);
-		result += tail;
+		L1 = std::abs(tail);
+		std::complex<double> result = IntegrateSegments(f, seg, tol, L1) + tail;
 		CheckComplexResultForInfOrNaN(result, "the direct Gauss-Kronrod integration result");
 		return result;
 	}
@@ -392,20 +442,17 @@ std::complex<double> IntegrateFarFieldGeneric(const F &f, double rho, int order,
 	double b = BesselJ_NextZero(order, a*rho)/rho;
 	double q = M_PI/rho;
 
-	std::complex<double> bridge = 0.0;
 	double left = a, width = std::max(a, std::ldexp(b, -60));
 	while (left < b)
 	{
 		double right = std::min(b, left + width);
-		std::complex<double> part = 0.0;
-		GaussKronrodBoost(f, left, right, tol, part);
-		bridge += part;
+		seg.push_back({left, right});
 		left = right;
 		width *= 2.0;
 	}
 
-	// Integrate on half periods until the known decay has made the integrand negligible; the extrapolation starts at the
-	// next zero of J_order beyond that point.
+	// Half periods until the known decay has made the integrand negligible; the extrapolation starts at the next zero of
+	// J_order beyond that point.
 	if (decay > 0.0)
 	{
 		double target = 40.0/decay;
@@ -415,28 +462,29 @@ std::complex<double> IntegrateFarFieldGeneric(const F &f, double rho, int order,
 			while (left < start)
 			{
 				double right = std::min(start, left + 0.5*q);
-				std::complex<double> part = 0.0;
-				GaussKronrodBoost(f, left, right, tol, part);
-				bridge += part;
+				seg.push_back({left, right});
 				left = right;
 			}
 			b = left;
 		}
 	}
 
-	std::complex<double> result = 0.0;
-	PartExtrap(f, b, q, tol, result);
+	std::complex<double> tail = 0.0;
+	PartExtrap(f, b, q, tol, tail);
+	L1 = std::abs(tail);
+	std::complex<double> bridge = IntegrateSegments(f, seg, tol, L1);
 
-	CheckComplexResultForInfOrNaN(result, "the partition-extrapolated tail result");
+	CheckComplexResultForInfOrNaN(tail, "the partition-extrapolated tail result");
 	CheckComplexResultForInfOrNaN(bridge, "the Gauss-Kronrod bridge integration result");
-	return result + bridge;
+	return tail + bridge;
 
 }
 
 
-/*! \brief Spectral near-field integral of f(krho) over the rectangular detour from 0 to a (path of IntegrateSpectralNearField()).*/
+/*! \brief Spectral near-field integral of f(krho) over the rectangular detour from 0 to a (path of IntegrateSpectralNearField()),
+to a tolerance relative to L1_far plus the magnitude of the near-field segments.*/
 template<class F>
-std::complex<double> IntegrateNearFieldGeneric(const F &f, double rho, double kmax_abs, double a, double tol)
+std::complex<double> IntegrateNearFieldGeneric(const F &f, double rho, double kmax_abs, double a, double tol, double L1_far)
 {
 
 	const std::complex<double> J (0.0, 1.0);
@@ -445,37 +493,29 @@ std::complex<double> IntegrateNearFieldGeneric(const F &f, double rho, double km
 	if (rho > 0.0)
 		h = std::min(h, 1.0/rho);
 	h = std::max(h, 1.0e-3*kmax_abs);
-	double krho_real, krho_imag;
 
-	auto f_real = [&f, &krho_imag, &J](double _krho_real) -> std::complex<double>
-		{
-			return f(_krho_real + J*krho_imag);
-		};
-	auto f_imag = [&f, &krho_real, &J](double _krho_imag) -> std::complex<double>
-		{
-			return f(krho_real + J*_krho_imag);
-		};
+	auto f_up = [&f, &J](double t) -> std::complex<double> { return f(J*t); };             // 0 -> j h
+	auto f_across = [&f, &J, h](double x) -> std::complex<double> { return f(x + J*h); };  // j h -> a + j h
+	auto f_down = [&f, &J, a](double t) -> std::complex<double> { return f(a + J*t); };    // a + j h -> a
 
-	std::complex<double> first_path = 0.0;
-	krho_real = 0.0;
-	GaussKronrodBoost(f_imag, 0.0, h, tol, first_path);
-
-	std::complex<double> second_path = 0.0;
-	krho_imag = h;
 	double half_periods = (rho > 0.0) ? std::ceil(a*rho/M_PI) : 1.0;
 	int panels = (int)std::min(std::max(half_periods, 1.0), 1.0e5);
 	double width = a/panels;
+
+	double L1 = L1_far;
+	L1 += std::abs(GaussKronrodCoarse(f_up, 0.0, h));
 	for (int p = 0; p < panels; p++)
-	{
-		std::complex<double> part = 0.0;
-		GaussKronrodBoost(f_real, p*width, (p + 1)*width, tol, part);
-		second_path += part;
-	}
+		L1 += std::abs(GaussKronrodCoarse(f_across, p*width, (p + 1)*width));
+	L1 += std::abs(GaussKronrodCoarse(f_down, 0.0, h));
+	double target = tol*L1/(panels + 2.0);
 
-	std::complex<double> third_path = 0.0;
-	krho_real = a;
-	GaussKronrodBoost(f_imag, h, 0.0, tol, third_path);
+	std::complex<double> first_path = GaussKronrodAbs(f_up, 0.0, h, target);
+	std::complex<double> second_path = 0.0;
+	for (int p = 0; p < panels; p++)
+		second_path += GaussKronrodAbs(f_across, p*width, (p + 1)*width, target);
+	std::complex<double> third_path = -GaussKronrodAbs(f_down, 0.0, h, target);
 
+	// The vertical paths are parametrized by the imaginary part t of krho, so dkrho = j dt there.
 	return (J*first_path + second_path + J*third_path);
 
 }
@@ -505,7 +545,9 @@ inline std::complex<double> IntegrateSpectralFamily(SpectralMGF &smgf, double rh
 		{
 			return SommerfeldIntegrandFamily(smgf, rho, krho, family, component, order, power);
 		};
-	return IntegrateFarFieldGeneric(f, rho, order, a, tol, FamilyDecayLength(smgf)) + IntegrateNearFieldGeneric(f, rho, std::abs(smgf.lm->k_max), a, tol);
+	double L1 = 0.0;
+	std::complex<double> far = IntegrateFarFieldGeneric(f, rho, order, a, tol, FamilyDecayLength(smgf), L1);
+	return far + IntegrateNearFieldGeneric(f, rho, std::abs(smgf.lm->k_max), a, tol, L1);
 }
 
 
